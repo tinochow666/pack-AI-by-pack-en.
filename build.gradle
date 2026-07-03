@@ -1,0 +1,177 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+group = 'com.phiigrame'
+version = '1.0.0'
+
+ext {
+    javafxVersion = '21.0.1'
+    controlsfxVersion = '11.2.1'
+    richtextfxVersion = '0.11.1'
+}
+
+javafx {
+    version = javafxVersion
+    modules = ['javafx.controls', 'javafx.fxml', 'javafx.graphics', 'javafx.web']
+}
+
+dependencies {
+    // JavaFX
+    implementation "org.openjfx:javafx-controls:$javafxVersion"
+    implementation "org.openjfx:javafx-fxml:$javafxVersion"
+    
+    // ControlsFX for additional UI components
+    implementation "org.controlsfx:controlsfx:$controlsfxVersion"
+    
+    // RichTextFX for code editing
+    implementation "org.fxmisc.richtext:richtextfx:$richtextfxVersion"
+    
+    // Spring Boot (optional, for backend features)
+    implementation 'org.springframework.boot:spring-boot-starter:3.2.0'
+    
+    // JSON processing
+    implementation 'com.google.code.gson:gson:2.10.1'
+    
+    // llama.cpp Java bindings (pure native, no Python needed)
+    // Bundles libJLlama.dll / libJLlama.so for offline inference.
+    implementation 'de.kherud:llama:3.0.0'
+    
+    // Logging
+    implementation 'ch.qos.logback:logback-classic:1.4.11'
+    
+    // Testing
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
+}
+
+application {
+    mainClass = 'com.phiigrame.PhiigrameApp'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// ---------------------------------------------------------------------------
+//  jpackage tasks - turn the project into a Windows .exe / .msi
+// ---------------------------------------------------------------------------
+//
+//  Builds a fat jar with all runtime dependencies, then feeds it to
+//  JDK's jpackage tool which produces:
+//      - dist/PhiigrameIDE/          (app-image, portable folder with .exe)
+//      - dist/PhiigrameIDE-1.0.0.msi (Windows installer)
+//
+//  Run with:   gradle jpackageExe        (app-image)
+//              gradle jpackageMsi        (installer)
+//              gradle jpackage           (both)
+// ---------------------------------------------------------------------------
+
+// 1. Copy every runtime dependency to build/libs/lib/ so jpackage can
+//    ship them in the app-image next to the main jar.
+task copyDependencies(type: Copy) {
+    from configurations.runtimeClasspath
+    into 'build/libs/lib'
+}
+jar.dependsOn copyDependencies
+
+// 2. Add a Class-Path manifest entry to the main jar so it can find
+//    every dependency in the bundled lib/ folder.
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'com.phiigrame.PhiigrameApp',
+            'Class-Path': fileTree('build/libs/lib')
+                    .files
+                    .collect { 'lib/' + it.name }
+                    .join(' ')
+        )
+    }
+}
+
+// 3. Resolve jpackage.exe from JAVA_HOME
+def jpackageExe = "${System.getProperty('java.home')}\\bin\\jpackage.exe"
+
+// 4. Build the application image (portable folder with PhiigrameIDE.exe)
+tasks.register('jpackageExe', Exec) {
+    dependsOn 'build'
+    description = 'Build a Windows app-image containing PhiigrameIDE.exe'
+    workingDir projectDir
+    def iconPath = 'src/main/resources/icons/phiigrame.ico'
+    def iconExists = new File(iconPath).exists()
+    def cmd = [
+        jpackageExe,
+        '--type', 'app-image',
+        '--input', 'build/libs',
+        '--dest', 'dist',
+        '--name', 'PhiigrameIDE',
+        '--main-class', 'com.phiigrame.PhiigrameApp',
+        '--main-jar', "phiigrame-${version}.jar",
+        '--app-version', version,
+        '--vendor', 'Phiigrame',
+        '--description', 'Phiigrame IDE with built-in local AI (Qwen2.5-Coder)',
+        // Bundle JavaFX as modules so they are usable from the runtime
+        '--module-path', 'build/libs/lib',
+        '--add-modules', 'javafx.controls,javafx.fxml,javafx.graphics,javafx.web,javafx.media',
+        '--java-options', '-Xms128m',
+        '--java-options', '-Xmx4g',
+        '--java-options', '-Dfile.encoding=UTF-8',
+        '--java-options', '-Dprism.order=sw'
+    ]
+    if (iconExists) cmd.addAll(['--icon', iconPath])
+    commandLine cmd
+    ignoreExitValue = false
+}
+
+// 5. Build a Windows MSI installer
+tasks.register('jpackageMsi', Exec) {
+    dependsOn 'build'
+    description = 'Build a Windows MSI installer for Phiigrame IDE'
+    workingDir projectDir
+    def iconPath = 'src/main/resources/icons/phiigrame.ico'
+    def iconExists = new File(iconPath).exists()
+    def cmd = [
+        jpackageExe,
+        '--type', 'msi',
+        '--input', 'build/libs',
+        '--dest', 'dist',
+        '--name', 'PhiigrameIDE',
+        '--main-class', 'com.phiigrame.PhiigrameApp',
+        '--main-jar', "phiigrame-${version}.jar",
+        '--app-version', version,
+        '--vendor', 'Phiigrame',
+        '--description', 'Phiigrame IDE with built-in local AI (Qwen2.5-Coder)',
+        '--win-dir-chooser',
+        '--win-menu',
+        '--win-shortcut',
+        '--win-menu-group', 'Phiigrame',
+        '--java-options', '-Xms128m',
+        '--java-options', '-Xmx4g',
+        '--java-options', '-Dfile.encoding=UTF-8'
+    ]
+    if (iconExists) cmd.addAll(['--icon', iconPath])
+    commandLine cmd
+    ignoreExitValue = false
+}
+
+// 6. Run both at once
+tasks.register('jpackage') {
+    dependsOn 'jpackageExe', 'jpackageMsi'
+    description = 'Build the Windows app-image and MSI installer'
+}
+
+// 7. Copy ai_server.py and the model bootstrap script (kept for any
+//    user who still wants to run them outside the IDE).
+task copyAiServer(type: Copy) {
+    from 'ai_server.py'
+    into 'build/libs'
+}
+afterEvaluate {
+    tasks.named('jar').configure { dependsOn copyAiServer }
+}
