@@ -822,7 +822,9 @@ public class PhiigrameApp extends Application {
         Menu helpMenu = new Menu("Help");
         MenuItem aboutItem = new MenuItem("About Phiigrame");
         aboutItem.setOnAction(e -> showAbout());
-        helpMenu.getItems().add(aboutItem);
+        MenuItem registerItem = new MenuItem("Add to Start Menu");
+        registerItem.setOnAction(e -> registerToStartMenu());
+        helpMenu.getItems().addAll(registerItem, new SeparatorMenuItem(), aboutItem);
         
         menuBar.getMenus().addAll(fileMenu, editMenu, viewMenu, aiMenu, accountMenu, helpMenu);
         
@@ -865,7 +867,56 @@ public class PhiigrameApp extends Application {
             }
         });
     }
-    
+
+    /**
+     * Register the IDE to the Windows Start Menu so it shows up in
+     * Search and in the user Programs list.  Locates the packaged
+     * {@code PhiigrameIDE.exe} next to the running classes/jar
+     * (jpackage app-image layout) and hands the path to the registrar.
+     */
+    private void registerToStartMenu() {
+        try {
+            java.io.File code = new java.io.File(
+                    com.phiigrame.PhiigrameApp.class.getProtectionDomain()
+                            .getCodeSource().getLocation().toURI());
+            java.io.File dir = code.isDirectory() ? code : code.getParentFile();
+            // When running from build/classes the executable lives in
+            // dist/PhiigrameIDE/.  When running from inside the
+            // app-image the executable is in the same directory.
+            java.io.File[] candidates = {
+                    new java.io.File(dir, "PhiigrameIDE.exe"),
+                    new java.io.File(dir, "../dist/PhiigrameIDE/PhiigrameIDE.exe"),
+                    new java.io.File(dir, "../../dist/PhiigrameIDE/PhiigrameIDE.exe"),
+            };
+            java.io.File exe = null;
+            for (java.io.File c : candidates) {
+                if (c.isFile()) { exe = c.getCanonicalFile(); break; }
+            }
+            if (exe == null) {
+                showAlert(Alert.AlertType.WARNING,
+                        "Could not find PhiigrameIDE.exe next to the running classes. " +
+                        "Build the app-image with jpackage first (it lives in dist/PhiigrameIDE/).");
+                return;
+            }
+            com.phiigrame.services.RegistryRegistrar r =
+                    new com.phiigrame.services.RegistryRegistrar(exe.toPath());
+            com.phiigrame.services.RegistryRegistrar.Result res = r.isRegistered()
+                    ? r.unregister()
+                    : r.register();
+            showAlert(res.ok ? Alert.AlertType.INFORMATION : Alert.AlertType.ERROR,
+                    res.message);
+        } catch (Exception ex) {
+            showAlert(Alert.AlertType.ERROR, "Registration error: " + ex.getMessage());
+        }
+    }
+
+    private void showAlert(Alert.AlertType type, String msg) {
+        Alert a = new Alert(type, msg, ButtonType.OK);
+        a.setTitle("Phiigrame");
+        a.setHeaderText(null);
+        a.showAndWait();
+    }
+
     private void openProject() {
         DirectoryChooser chooser = new DirectoryChooser();
         chooser.setTitle("Open Project");
