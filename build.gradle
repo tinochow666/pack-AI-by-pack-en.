@@ -34,6 +34,9 @@ dependencies {
     
     // JSON processing
     implementation 'com.google.code.gson:gson:2.10.1'
+
+    // SQLite (local user DB, recents, sessions, model configs)
+    implementation 'org.xerial:sqlite-jdbc:3.45.3.0'
     
     // llama.cpp Java bindings (pure native, no Python needed)
     // Bundles libJLlama.dll / libJLlama.so for offline inference.
@@ -105,6 +108,13 @@ tasks.register('jpackageExe', Exec) {
     workingDir projectDir
     def iconPath = 'src/main/resources/icons/phiigrame.ico'
     def iconExists = new File(iconPath).exists()
+    doFirst {
+        // Clean up any previous app-image so jpackage does not fail on existing dest
+        def appImage = new File(projectDir, 'dist/PhiigrameIDE')
+        if (appImage.exists()) {
+            appImage.deleteDir()
+        }
+    }
     def cmd = [
         jpackageExe,
         '--type', 'app-image',
@@ -118,7 +128,7 @@ tasks.register('jpackageExe', Exec) {
         '--description', 'Phiigrame IDE with built-in local AI (Qwen2.5-Coder)',
         // Bundle JavaFX as modules so they are usable from the runtime
         '--module-path', 'build/libs/lib',
-        '--add-modules', 'javafx.controls,javafx.fxml,javafx.graphics,javafx.web,javafx.media',
+        '--add-modules', 'javafx.controls,javafx.fxml,javafx.graphics,javafx.web,javafx.media,java.sql',
         '--java-options', '-Xms128m',
         '--java-options', '-Xmx4g',
         '--java-options', '-Dfile.encoding=UTF-8',
@@ -151,6 +161,7 @@ tasks.register('jpackageMsi', Exec) {
         '--win-menu',
         '--win-shortcut',
         '--win-menu-group', 'Phiigrame',
+        '--add-modules', 'java.sql',
         '--java-options', '-Xms128m',
         '--java-options', '-Xmx4g',
         '--java-options', '-Dfile.encoding=UTF-8'
@@ -175,3 +186,109 @@ task copyAiServer(type: Copy) {
 afterEvaluate {
     tasks.named('jar').configure { dependsOn copyAiServer }
 }
+
+// ---------------------------------------------------------------------------
+//  itch.io distribution zip
+// ---------------------------------------------------------------------------
+//  itch.io expects a single file upload.  We package the Windows app-image
+//  (a folder containing PhiigrameIDE.exe plus the bundled JDK + JavaFX
+//  runtime) along with a short README so a user can just download, unzip,
+//  and run.
+//
+//  Output:   dist/PhiigrameIDE-itch-<version>.zip
+//  Run with: gradle itchZip
+// ---------------------------------------------------------------------------
+tasks.register('itchZip', Zip) {
+    dependsOn 'jpackageExe'
+    group = 'distribution'
+    description = 'Build a zip suitable for uploading to itch.io'
+    archiveBaseName = 'PhiigrameIDE-itch'
+    archiveVersion  = version
+    archiveExtension = 'zip'
+    destinationDirectory = file('dist')
+
+    // Resolve the freshly-built app-image at execution time so a clean
+    // build doesn't have to know its folder name in advance.
+    from({ project.fileTree('dist/PhiigrameIDE').dir }) {
+        into 'PhiigrameIDE'
+    }
+    from('ITCH_README.md') {
+        into 'PhiigrameIDE'
+    }
+}
+
+// Always rebuild the README on demand so documentation tweaks are not
+// silently lost between builds.
+tasks.register('genItchReadme', WriteTask) {
+    outputFile = file('ITCH_README.md')
+    content = '''# Phiigrame IDE — itch.io build
+
+Thank you for downloading **Phiigrame IDE 1.0.0**, an AI-augmented
+desktop IDE for Kotlin, Java, and Groovy with a built-in local LLM
+(Qwen2.5-Coder 1.5B).  This build is a portable app-image - no
+installer, no admin rights required.
+
+## How to run (Windows)
+
+1. Unzip `PhiigrameIDE-itch-1.0.0.zip` anywhere you have write
+   access (Desktop, `D:\\\\Games`, etc.).
+2. Open the extracted `PhiigrameIDE` folder.
+3. Double-click **`PhiigrameIDE.exe`**.
+
+The first launch may take 10-20 seconds while the JVM starts.  When
+the login dialog appears, choose **Create Account** or close the
+dialog to continue as a guest (the guest account still has full AI
+access, but chat history is local-only).
+
+> If SmartScreen blocks the binary, click "More info" → "Run anyway".
+> Phiigrame is unsigned while we are in early access.
+
+## What is included
+
+| File / folder           | Purpose                                  |
+| ----------------------- | ---------------------------------------- |
+| `PhiigrameIDE.exe`      | The launcher (bundles a private JDK 17). |
+| `app/PhiigrameIDE.cfg`  | Runtime config (memory, jvm args).       |
+| `runtime/`              | Bundled JRE 17 - nothing to install.     |
+| `lib/`                  | Phiigrame jars + dependencies.           |
+
+## Quick tour
+
+* **File -> New Project** - scaffold a new project.
+* **File -> Open** or **File -> Recent Projects** - reopen a folder.
+  The **Welcome** tab shows your most recently used projects; right
+  click a row to open it in Explorer or remove it from the list.
+* **AI** sidebar tab - chat with the local Qwen2.5-Coder model.  All
+  inference happens on your machine; no data leaves your computer.
+* **Plugins** -> **Phiigrame AI Assistant** - swap the local model
+  for a remote OpenAI-compatible endpoint (DeepSeek, Qwen, OpenAI
+  itself, anything with `/chat/completions`).
+
+## System requirements
+
+* Windows 10 64-bit or newer (build 17763+).
+* ~1.5 GB free disk space (the bundled JRE alone is ~250 MB).
+* 4 GB RAM minimum; 8 GB recommended for the AI.
+* No Python, no Ollama, no Docker.
+
+## Source and updates
+
+* Source code: https://github.com/tinochow666/pack-AI-by-pack-en
+* Bug reports: open an issue on the GitHub repository.
+* License: MIT.
+
+Made with care.  Happy hacking!
+'''
+}
+
+// A tiny helper task type so we can generate the README from the
+// build script without an external template.
+class WriteTask extends org.gradle.api.DefaultTask {
+    @org.gradle.api.tasks.Input String content
+    @org.gradle.api.tasks.OutputFile java.io.File outputFile
+    @org.gradle.api.tasks.TaskAction void write() {
+        outputFile.parentFile.mkdirs()
+        outputFile.text = content
+    }
+}
+tasks.named('itchZip').configure { dependsOn 'genItchReadme' }

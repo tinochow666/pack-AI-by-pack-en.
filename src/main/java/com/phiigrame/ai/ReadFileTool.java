@@ -17,6 +17,8 @@ public class ReadFileTool implements AiTool {
 
     @Override public String name() { return "read_file"; }
 
+    @Override public AiTool.Risk risk() { return AiTool.Risk.READ; }
+
     @Override
     public String description() {
         return "Read a UTF-8 text file. Args: {path: string, max_chars?: int}. " +

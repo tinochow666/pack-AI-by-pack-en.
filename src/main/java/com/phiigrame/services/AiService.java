@@ -312,6 +312,90 @@ public class AiService {
     }
 
     /**
+     * Streaming chat.  Tokens are pushed one at a time to {@code onToken}
+     * on the JavaFX thread; the final, full text is delivered once to
+     * {@code onResult} when generation finishes.  {@code onComplete} is
+     * invoked after that.  This is the method the UI uses to render
+     * tokens live into the chat bubble.
+     */
+    public void chatStream(String userMessage, List<Map<String, String>> history,
+                           Consumer<String> onToken, Consumer<String> onResult,
+                           Runnable onComplete) {
+        ensureModelThen(() -> {
+            String prompt = buildChatPrompt(userMessage, history);
+            executor.submit(() -> {
+                try {
+                    if (isRemote()) {
+                        // For the HTTP path we still buffer the response -
+                        // most OpenAI-compatible endpoints don't support
+                        // streaming, and even when they do the UX is
+                        // good enough with one update.
+                        String text = generateRemote(prompt, 1024, 0.7f);
+                        if (onToken != null && text != null && !text.isEmpty()) {
+                            String finalText = text;
+                            javafx.application.Platform.runLater(() -> onToken.accept(finalText));
+                        }
+                        deliverResult(onResult, text);
+                        runCallback(onComplete);
+                        return;
+                    }
+                    LlamaModel m = model;
+                    if (m == null) throw new IllegalStateException("Model not loaded");
+                    InferenceParameters inf = new InferenceParameters(prompt)
+                            .setNPredict(1024)
+                            .setTemperature(0.7f)
+                            .setTopP(0.95f)
+                            .setTopK(40)
+                            .setSamplers(Sampler.TOP_K, Sampler.TOP_P, Sampler.TEMPERATURE);
+                    StringBuilder out = new StringBuilder();
+                    for (LlamaModel.Output o : m.generate(inf)) {
+                        if (o == null || o.text == null) continue;
+                        out.append(o.text);
+                        if (onToken != null) {
+                            String token = o.text;
+                            javafx.application.Platform.runLater(() -> onToken.accept(token));
+                        }
+                        String s = out.toString();
+                        if (s.contains("<|im_end|>") || s.contains("<|endoftext|>")) {
+                            break;
+                        }
+                    }
+                    String cleaned = out.toString()
+                            .replace("<|im_end|>", "")
+                            .replace("<|endoftext|>", "")
+                            .replace("<|im_start|>", "")
+                            .trim();
+                    deliverResult(onResult, cleaned);
+                    runCallback(onComplete);
+                } catch (Throwable t) {
+                    lastError = t.getMessage();
+                    String err = "Error: " + lastError;
+                    if (onToken != null) {
+                        javafx.application.Platform.runLater(() -> onToken.accept(err));
+                    }
+                    deliverResult(onResult, err);
+                    runCallback(onComplete);
+                }
+            });
+        });
+    }
+
+    private void deliverResult(Consumer<String> c, String value) {
+        if (c == null) return;
+        if (javafx.application.Platform.isFxApplicationThread()) {
+            c.accept(value);
+        } else {
+            javafx.application.Platform.runLater(() -> c.accept(value));
+        }
+    }
+
+    private void runCallback(Runnable r) {
+        if (r == null) return;
+        if (javafx.application.Platform.isFxApplicationThread()) r.run();
+        else javafx.application.Platform.runLater(r);
+    }
+
+    /**
      * Chat variant that knows about a {@link com.phiigrame.ai.ToolRegistry}.
      *
      * <p>The flow is:

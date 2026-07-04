@@ -62,6 +62,7 @@ public class PhiigrameApp extends Application {
     
     // New services
     private AuthService authService;
+    private com.phiigrame.services.UserDatabase userDb;
     private AiService aiService;
     private com.phiigrame.services.ModelConfigService modelConfigService;
     private AiHistoryService aiHistoryService;
@@ -102,6 +103,7 @@ public class PhiigrameApp extends Application {
         // Initialize services
         projectManager = new ProjectManager();
         authService = new AuthService();
+        userDb = new com.phiigrame.services.UserDatabase();
         trustedFoldersService = new com.phiigrame.services.TrustedFoldersService();
         aiService = new AiService();
         modelConfigService = new com.phiigrame.services.ModelConfigService();
@@ -150,7 +152,16 @@ public class PhiigrameApp extends Application {
                 .register(new com.phiigrame.ai.CreateFileTool(workspaceService))
                 .register(new com.phiigrame.ai.EditFileTool(workspaceService))
                 .register(new com.phiigrame.ai.WriteFileTool(workspaceService))
-                .register(new com.phiigrame.ai.DeleteFileTool(workspaceService));
+                .register(new com.phiigrame.ai.DeleteFileTool(workspaceService))
+                .register(new com.phiigrame.ai.GrepTool(workspaceService))
+                .register(new com.phiigrame.ai.GlobTool(workspaceService))
+                .register(new com.phiigrame.ai.BashTool(workspaceService))
+                .register(new com.phiigrame.ai.GitTool(workspaceService, "status"))
+                .register(new com.phiigrame.ai.GitTool(workspaceService, "log"))
+                .register(new com.phiigrame.ai.GitTool(workspaceService, "diff"))
+                .register(new com.phiigrame.ai.GitTool(workspaceService, "add"))
+                .register(new com.phiigrame.ai.GitTool(workspaceService, "commit"))
+                .register(new com.phiigrame.ai.GitTool(workspaceService, "push"));
 
         // Right sidebar - AI chat panel (requires login to start a chat)
         aiChatPanel = new AiChatPanel(aiService, aiHistoryService, authService, toolRegistry);
@@ -372,7 +383,8 @@ public class PhiigrameApp extends Application {
             selectPlugins,
             selectLearn,
             selectCustomize,
-            selectRemote
+            selectRemote,
+            userDb
         );
 
         Tab welcomeTab = new Tab("Welcome");
@@ -482,14 +494,26 @@ public class PhiigrameApp extends Application {
             emptyProjectContainer.setManaged(false);
         }
         
-        // Refresh git info for the project (async)
+        // Refresh git info for the project (async). When the result lands,
+        // we also stamp the recent-projects row with the current branch so
+        // the welcome screen can show "untitled  master" like IntelliJ does.
         gitService.setProject(projectDir, isRepo -> {
+            final String branch = isRepo ? gitService.getCurrentBranch() : null;
+            if (userDb != null) {
+                userDb.recordRecent(projectDir.getAbsolutePath(), branch);
+            }
             Platform.runLater(() -> {
                 if (isRepo && gitHistoryPanel != null) {
                     gitHistoryPanel.refresh();
                 }
             });
         });
+        // Record the project immediately, even before git finishes -
+        // the welcome screen will see the row right away, with a blank
+        // branch field that fills in once git resolves.
+        if (userDb != null) {
+            userDb.recordRecent(projectDir.getAbsolutePath(), null);
+        }
         
         // Force UI refresh on JavaFX thread
         Platform.runLater(() -> {
@@ -560,10 +584,24 @@ public class PhiigrameApp extends Application {
             });
             
             // Wire up AI code completion on Ctrl+Space (handled in code area)
+            // The completion handler is per-tab so the popup is wired to
+            // the right editor.  We also feed the AI result back into the
+            // floating popup so the user can accept / reject it from
+            // there instead of through an Alert dialog.
+            final CodeEditorTab theTab = newTab;
+            newTab.setCompletionHandler(req -> requestAiCompletion(theTab, req));
             newTab.getCodeArea().setOnKeyPressed(event -> {
                 if (event.isControlDown() && event.getCode() == KeyCode.SPACE) {
-                    triggerAiCompletion(newTab);
+                    theTab.triggerCompletion();
                     event.consume();
+                }
+            });
+
+            // When the editor loses focus / the user clicks elsewhere,
+            // hide the popup so it doesn't dangle.
+            newTab.getCodeArea().focusedProperty().addListener((o, ov, nv) -> {
+                if (!nv) {
+                    newTab.hideCompletion();
                 }
             });
             
@@ -577,65 +615,62 @@ public class PhiigrameApp extends Application {
     }
     
     /**
-     * Trigger AI code completion for the current file and offer the result
-     * via a dialog. On accept, the completion is inserted at the caret.
-     * Auto-starts the local Python AI server if it is not running.
+     * Request an AI completion for the given request and feed the result
+     * back into the floating completion popup.  The user can then accept
+     * the suggestion (Enter / Tab) or dismiss it (Esc).  Falls back to a
+     * confirmation dialog if the popup is somehow not visible.
      */
-    private void triggerAiCompletion(CodeEditorTab tab) {
+    private void requestAiCompletion(CodeEditorTab tab, CodeEditorTab.CompletionRequest req) {
         if (tab == null) return;
-        String prefix = tab.getCurrentPrefix();
-        String suffix = tab.getCurrentSuffix();
-        String fileName = tab.getFile().getName();
-        String language = SyntaxHighlighter.getLanguageFromExtension(fileName);
-        
         statusLabel.setText("Asking local AI for completion...");
-        
+
         // Make sure the local server is up (no-op if it already is)
-        aiService.checkAvailability(ok -> {
-            Platform.runLater(() -> {
-                if (!ok) {
-                    statusLabel.setText("AI server not available: " + aiService.getLastError());
-                    showAlert("AI Unavailable",
-                        "The local AI server is not running.\n\n" +
-                        "Open AI -> AI Settings... to start it, or check that Python 3 is installed.\n\n" +
-                        "Details: " + aiService.getLastError());
-                    return;
-                }
-                runCompletion(tab, prefix, suffix, language, fileName);
-            });
-        });
+        aiService.checkAvailability(ok -> Platform.runLater(() -> {
+            if (!ok) {
+                statusLabel.setText("AI server not available: " + aiService.getLastError());
+                return;
+            }
+            aiService.completeCode(req.prefix, req.suffix, req.language, req.fileName,
+                    completion -> Platform.runLater(() -> {
+                        if (completion == null || completion.isEmpty()) {
+                            statusLabel.setText("AI returned no completion");
+                            return;
+                        }
+                        if (completion.startsWith("Error:")) {
+                            statusLabel.setText("AI error: " + completion);
+                            return;
+                        }
+                        // Feed the suggestion back into the popup so the
+                        // user can pick it from the existing list.
+                        tab.feedAiCompletion(completion);
+                        if (!tab.isCompletionVisible()) {
+                            // popup was dismissed while we waited - show
+                            // a confirmation dialog as a fallback.
+                            showAiCompletionDialog(tab, completion);
+                        } else {
+                            statusLabel.setText("AI completion ready (Enter to accept)");
+                        }
+                    }));
+        }));
     }
-    
-    private void runCompletion(CodeEditorTab tab, String prefix, String suffix,
-                               String language, String fileName) {
-        aiService.completeCode(prefix, suffix, language, fileName, completion -> {
-            if (completion == null || completion.isEmpty()) {
-                statusLabel.setText("AI returned no completion");
-                return;
+
+    private void showAiCompletionDialog(CodeEditorTab tab, String completion) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("AI Code Completion");
+        alert.setHeaderText("Suggested by " + aiService.getModelName() + " (local)");
+
+        TextArea textArea = new TextArea(completion);
+        textArea.setEditable(true);
+        textArea.setWrapText(false);
+        textArea.setPrefSize(560, 320);
+        textArea.setStyle("-fx-font-family: 'JetBrains Mono', monospace; -fx-font-size: 12px;");
+        alert.getDialogPane().setContent(textArea);
+
+        alert.showAndWait().ifPresent(result -> {
+            if (result == ButtonType.OK) {
+                tab.applyCompletion(textArea.getText());
+                statusLabel.setText("AI completion applied");
             }
-            if (completion.startsWith("Error:")) {
-                showAlert("AI Error", completion);
-                statusLabel.setText("AI error: " + completion);
-                return;
-            }
-            // Show a confirmation dialog with the suggestion
-            Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
-            alert.setTitle("AI Code Completion");
-            alert.setHeaderText("Suggested by " + aiService.getModelName() + " (local)");
-            
-            TextArea textArea = new TextArea(completion);
-            textArea.setEditable(true);
-            textArea.setWrapText(false);
-            textArea.setPrefSize(560, 320);
-            textArea.setStyle("-fx-font-family: 'JetBrains Mono', monospace; -fx-font-size: 12px;");
-            alert.getDialogPane().setContent(textArea);
-            
-            alert.showAndWait().ifPresent(result -> {
-                if (result == ButtonType.OK) {
-                    tab.applyCompletion(textArea.getText());
-                    statusLabel.setText("AI completion applied");
-                }
-            });
         });
     }
     
@@ -754,7 +789,7 @@ public class PhiigrameApp extends Application {
         aiCompleteItem.setOnAction(e -> {
             Tab sel = tabPane.getSelectionModel().getSelectedItem();
             if (sel instanceof CodeEditorTab) {
-                triggerAiCompletion((CodeEditorTab) sel);
+                ((CodeEditorTab) sel).triggerCompletion();
             }
         });
         MenuItem aiSettingsItem = new MenuItem("AI Settings...");

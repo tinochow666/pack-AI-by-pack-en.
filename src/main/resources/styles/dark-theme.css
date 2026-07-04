@@ -751,3 +751,99 @@
 .type {
     -fx-fill: #4ec9b0;
 }
+
+.builtin {
+    -fx-fill: #dcdcaa;
+}
+
+.operator {
+    -fx-fill: #d4d4d4;
+    -fx-font-weight: bold;
+}
+
+.property {
+    -fx-fill: #9cdcfe;
+}
+
+.tag {
+    -fx-fill: #569cd6;
+    -fx-font-weight: bold;
+}
+
+.attribute {
+    -fx-fill: #9cdcfe;
+}
+
+/* AI Chat panel */
+.ai-panel {
+    -fx-background-color: #1e1e1e;
+}
+
+.ai-bubble-user {
+    -fx-background-color: #2d2d30;
+    -fx-background-radius: 6;
+    -fx-border-color: #3e3e42;
+    -fx-border-radius: 6;
+}
+
+.ai-bubble-assistant {
+    -fx-background-color: #252526;
+    -fx-background-radius: 6;
+    -fx-border-color: #3e3e42;
+    -fx-border-radius: 6;
+}
+
+.ai-bubble-system {
+    -fx-background-color: #1e1e1e;
+    -fx-background-radius: 6;
+    -fx-border-color: #2d2d30;
+    -fx-border-radius: 6;
+}
+
+.ai-code-block {
+    -fx-background-color: #1e1e1e;
+    -fx-background-radius: 4;
+    -fx-border-color: #3c3f41;
+    -fx-border-radius: 4;
+    -fx-border-width: 1;
+}
+
+.ai-code-block .header {
+    -fx-background-color: #2d2d30;
+    -fx-background-radius: 4 4 0 0;
+    -fx-padding: 4 10;
+}
+
+.ai-code-block .body {
+    -fx-padding: 8 12;
+}
+
+.ai-code-block .body Text {
+    -fx-font-family: 'JetBrains Mono', 'Consolas', monospace;
+    -fx-font-size: 12px;
+    -fx-fill: #d4d4d4;
+}
+
+.copy-button {
+    -fx-background-color: #3e3e42;
+    -fx-text-fill: #cccccc;
+    -fx-background-radius: 3;
+    -fx-padding: 2 8;
+    -fx-cursor: hand;
+    -fx-font-size: 10px;
+}
+
+.copy-button:hover {
+    -fx-background-color: #505354;
+}
+
+.md-link {
+    -fx-fill: #3574f0;
+    -fx-underline: true;
+}
+
+.md-inline-code {
+    -fx-fill: #d7ba7d;
+    -fx-font-family: 'JetBrains Mono', 'Consolas', monospace;
+    -fx-background-color: #2a2d2e;
+}

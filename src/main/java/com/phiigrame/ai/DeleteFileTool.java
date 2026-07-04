@@ -17,6 +17,8 @@ public class DeleteFileTool implements AiTool {
 
     @Override public String name() { return "delete_file"; }
 
+    @Override public AiTool.Risk risk() { return AiTool.Risk.DESTRUCTIVE; }
+
     @Override
     public String description() {
         return "Delete a file from disk. Args: {path: string}. " +

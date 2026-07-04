@@ -1,43 +1,49 @@
 package com.phiigrame.components;
 
 import javafx.scene.Node;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
 import javafx.scene.text.Font;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
+import org.fxmisc.richtext.model.StyleSpan;
+import org.fxmisc.richtext.model.StyleSpans;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * A small, dependency-free Markdown -> JavaFX {@link TextFlow} renderer.
+ * A small, dependency-free Markdown -> JavaFX renderer used by the
+ * AI chat panel.  Produces a {@link VBox} containing the rendered
+ * paragraphs and fenced code blocks.  Fenced code blocks are rendered
+ * with real syntax highlighting (multiple {@link Text} nodes styled
+ * by {@link SyntaxHighlighter}) and a small "copy" button.
  *
- * <p>Supports the subset of Markdown that the local 1.5B model is most
- * likely to emit:
+ * <p>Supported Markdown:
  * <ul>
- *   <li><b>Fenced code blocks</b> {@code ```lang ... ```} - monospace, dark
- *       background, preserved indentation.</li>
- *   <li><b>Inline code</b> {@code `code`} - monospace on a subtle background.</li>
- *   <li><b>Bold</b> {@code **text**} / {@code __text__} - bold font.</li>
- *   <li><b>Italic</b> {@code *text*} / {@code _text_} - italic font.</li>
- *   <li><b>Headers</b> {@code #}, {@code ##}, {@code ###} - larger bold text.</li>
- *   <li><b>Bulleted lists</b> lines starting with {@code -} or {@code *}.</li>
- *   <li><b>Numbered lists</b> lines starting with {@code 1.}.</li>
- *   <li><b>Links</b> {@code [text](url)} - rendered as blue underlined text.</li>
- *   <li>Blank lines as paragraph separators.</li>
+ *   <li>Fenced code blocks {@code ```lang ... ```}</li>
+ *   <li>Inline code {@code `code`}</li>
+ *   <li>Bold {@code **text**} / {@code __text__}</li>
+ *   <li>Italic {@code *text*} / {@code _text_}</li>
+ *   <li>Headers {@code #}, {@code ##}, {@code ###}</li>
+ *   <li>Bulleted and numbered lists</li>
+ *   <li>Links {@code [text](url)}</li>
  * </ul>
- *
- * The renderer is intentionally permissive - if it can't parse something
- * it falls back to plain text, so model output never gets mangled.
  */
 public final class MarkdownRenderer {
 
-    // Fenced code block: ```lang\n...\n```
     private static final Pattern FENCE = Pattern.compile(
             "(?m)^```([a-zA-Z0-9_+-]*)\\s*\\n([\\s\\S]*?)\\n```\\s*$");
 
-    // Inline formatting patterns (applied in order)
     private static final Pattern INLINE_CODE = Pattern.compile("`([^`\\n]+)`");
     private static final Pattern BOLD_ASTERISK = Pattern.compile("\\*\\*([^*\\n]+)\\*\\*");
     private static final Pattern BOLD_UNDERSCORE = Pattern.compile("__([^_\\n]+)__");
@@ -48,52 +54,57 @@ public final class MarkdownRenderer {
     private static final Pattern BULLET = Pattern.compile("^\\s*[-*]\\s+(.+)$");
     private static final Pattern NUMBERED = Pattern.compile("^\\s*\\d+\\.\\s+(.+)$");
 
-    // Color palette
-    private static final String TEXT_COLOR = "#d4d4d4";
-    private static final String CODE_BG = "#1e1e1e";
+    // Colors
+    private static final String TEXT_COLOR     = "#d4d4d4";
+    private static final String CODE_BG        = "#1e1e1e";
     private static final String INLINE_CODE_BG = "#2a2d2e";
-    private static final String LINK_COLOR = "#3574f0";
-    private static final String BORDER_COLOR = "#3c3f41";
-    private static final String COMMENT_COLOR = "#6a9955";
-    private static final String KEYWORD_COLOR = "#c586c0";
-    private static final String STRING_COLOR = "#ce9178";
+    private static final String LINK_COLOR     = "#3574f0";
+    private static final String BORDER_COLOR   = "#3c3f41";
+    private static final String COMMENT_COLOR  = "#6a9955";
+    private static final String KEYWORD_COLOR  = "#c586c0";
+    private static final String STRING_COLOR   = "#ce9178";
+    private static final String NUMBER_COLOR   = "#b5cea8";
+    private static final String FUNCTION_COLOR = "#dcdcaa";
+    private static final String TYPE_COLOR     = "#4ec9b0";
+    private static final String TAG_COLOR      = "#569cd6";
+    private static final String ATTR_COLOR     = "#9cdcfe";
+    private static final String PROP_COLOR     = "#9cdcfe";
 
     private MarkdownRenderer() {}
 
-    public static TextFlow render(String markdown) {
+    public static Node render(String markdown) {
         if (markdown == null) markdown = "";
-        TextFlow flow = new TextFlow();
-        flow.setStyle("-fx-background-color: transparent; -fx-padding: 4 2;");
-        flow.setLineSpacing(2);
+        VBox root = new VBox();
+        root.setStyle("-fx-background-color: transparent; -fx-padding: 4 2;");
+        root.setSpacing(6);
 
-        String[] segments = FENCE.split(markdown);
         Matcher fm = FENCE.matcher(markdown);
         int idx = 0;
         while (fm.find()) {
-            // [idx .. start) is plain text
             if (idx < fm.start()) {
-                addParagraph(flow, markdown.substring(idx, fm.start()));
+                addParagraph(root, markdown.substring(idx, fm.start()));
             }
-            // fence group: language, body
             String lang = fm.group(1) == null ? "" : fm.group(1).trim();
             String body = fm.group(2) == null ? "" : fm.group(2);
-            addCodeBlock(flow, lang, body);
+            addCodeBlock(root, lang, body);
             idx = fm.end();
         }
         if (idx < markdown.length()) {
-            addParagraph(flow, markdown.substring(idx));
+            addParagraph(root, markdown.substring(idx));
         }
-        return flow;
+        return root;
     }
 
     // ---- internals ----------------------------------------------------------
 
-    private static void addParagraph(TextFlow flow, String text) {
+    private static void addParagraph(VBox root, String text) {
         if (text == null) return;
+        TextFlow flow = new TextFlow();
+        flow.setLineSpacing(2);
+        flow.setStyle("-fx-background-color: transparent;");
         String[] lines = text.split("\\n", -1);
         for (int i = 0; i < lines.length; i++) {
             String line = lines[i];
-            // Headers
             Matcher h = HEADER.matcher(line);
             if (h.matches()) {
                 addHeader(flow, h.group(1).length(), h.group(2));
@@ -104,7 +115,10 @@ public final class MarkdownRenderer {
                 } else {
                     Matcher n = NUMBERED.matcher(line);
                     if (n.matches()) {
-                        addNumbered(flow, n.group(1));
+                        Text prefix = new Text("  1.  ");
+                        prefix.setStyle("-fx-fill: " + TEXT_COLOR + ";");
+                        flow.getChildren().add(prefix);
+                        addInline(flow, n.group(1));
                     } else {
                         addInline(flow, line);
                     }
@@ -112,17 +126,19 @@ public final class MarkdownRenderer {
             }
             if (i < lines.length - 1) flow.getChildren().add(new Text("\n"));
         }
-        flow.getChildren().add(new Text("\n\n"));
+        root.getChildren().add(flow);
     }
 
     private static void addHeader(TextFlow flow, int level, String text) {
-        Text t = new Text(text.trim() + "\n");
+        Text t = new Text(text.trim());
         switch (level) {
             case 1: t.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-fill: " + TEXT_COLOR + ";"); break;
             case 2: t.setStyle("-fx-font-size: 15px; -fx-font-weight: bold; -fx-fill: " + TEXT_COLOR + ";"); break;
             default: t.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-fill: " + TEXT_COLOR + ";"); break;
         }
+        t.setFont(Font.font("System", 12));
         flow.getChildren().add(t);
+        flow.getChildren().add(new Text("\n"));
     }
 
     private static void addBullet(TextFlow flow, String text) {
@@ -132,16 +148,8 @@ public final class MarkdownRenderer {
         addInline(flow, text);
     }
 
-    private static void addNumbered(TextFlow flow, String text) {
-        // Numbered lists keep the simple prefix-less rendering; if the
-        // user is reading assistant output a plain line is fine and the
-        // model often forgets the number on the next line anyway.
-        addInline(flow, text);
-    }
-
     private static void addInline(TextFlow flow, String text) {
-        // Pass 1: split on inline code first so we don't try to format
-        // its contents.
+        // Pass 1: split on inline code first.
         List<Node> nodes = new ArrayList<>();
         Matcher m = INLINE_CODE.matcher(text);
         int last = 0;
@@ -157,10 +165,6 @@ public final class MarkdownRenderer {
 
     private static List<Node> richTextSpans(String text) {
         List<Node> out = new ArrayList<>();
-        // Combine the bold / italic / link patterns into a single sweep.
-        // We do this in passes to keep the implementation readable.
-        // Bold first, then italic, then links.  Bold/italic may overlap
-        // in pathological input - in that case the first match wins.
         String s = text;
         s = BOLD_ASTERISK.matcher(s).replaceAll("\u0001$1\u0001");
         s = BOLD_UNDERSCORE.matcher(s).replaceAll("\u0001$1\u0001");
@@ -230,7 +234,6 @@ public final class MarkdownRenderer {
         t.setStyle("-fx-fill: " + LINK_COLOR + "; -fx-underline: true;");
         t.setFont(Font.font("System", 12));
         t.getStyleClass().add("md-link");
-        // Make the URL available as a tooltip (read-only is fine here).
         javafx.scene.control.Tooltip tip = new javafx.scene.control.Tooltip(url);
         javafx.scene.control.Tooltip.install(t, tip);
         return t;
@@ -238,42 +241,100 @@ public final class MarkdownRenderer {
 
     private static Text inlineCodeNode(String s) {
         Text t = new Text(" " + s + " ");
-        t.setStyle("-fx-fill: #d7ba7d; -fx-font-family: 'Consolas','Monaco',monospace; " +
+        t.setStyle("-fx-fill: #d7ba7d; -fx-font-family: 'JetBrains Mono','Consolas',monospace; " +
                 "-fx-background-color: " + INLINE_CODE_BG + ";");
-        t.setFont(Font.font("Consolas", 12));
+        t.setFont(Font.font("JetBrains Mono", 12));
+        t.getStyleClass().add("md-inline-code");
         return t;
     }
 
-    private static void addCodeBlock(TextFlow flow, String lang, String body) {
-        // Lightweight syntax tinting for a few popular languages.
-        String colored = tintCode(body, lang);
+    // ---------------------------------------------------------------- code
 
-        Text label = new Text((lang == null || lang.isEmpty() ? "code" : lang) + "\n");
-        label.setStyle("-fx-fill: " + COMMENT_COLOR + "; -fx-font-style: italic;");
-        label.setFont(Font.font("Consolas", 11));
-        flow.getChildren().add(label);
+    private static void addCodeBlock(VBox root, String lang, String body) {
+        VBox block = new VBox();
+        block.getStyleClass().add("ai-code-block");
+        block.setStyle("-fx-background-color: " + CODE_BG + "; -fx-background-radius: 4; " +
+                "-fx-border-color: " + BORDER_COLOR + "; -fx-border-radius: 4; " +
+                "-fx-border-width: 1;");
+        block.setFillWidth(true);
 
-        // Use a single Text node with a multi-line string.  This is
-        // simple, supports selection, and the monospace font keeps
-        // indentation visible.
-        Text code = new Text(colored + "\n");
-        code.setStyle(
-                "-fx-fill: #d4d4d4; -fx-font-family: 'Consolas','Monaco',monospace; " +
-                "-fx-background-color: " + CODE_BG + ";");
-        code.setFont(Font.font("Consolas", 12));
-        flow.getChildren().add(code);
+        // Header with language label and copy button
+        HBox header = new HBox();
+        header.setStyle("-fx-background-color: #2d2d30; -fx-background-radius: 4 4 0 0; " +
+                "-fx-padding: 4 10;");
+        header.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        Label langLabel = new Label(lang == null || lang.isEmpty() ? "code" : lang);
+        langLabel.setStyle("-fx-text-fill: " + COMMENT_COLOR + "; -fx-font-style: italic; " +
+                "-fx-font-size: 11px;");
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        Button copyBtn = new Button("Copy");
+        copyBtn.setStyle("-fx-background-color: #3e3e42; -fx-text-fill: #cccccc; " +
+                "-fx-background-radius: 3; -fx-padding: 2 10; -fx-cursor: hand; -fx-font-size: 10px;");
+        copyBtn.setOnAction(e -> {
+            ClipboardContent content = new ClipboardContent();
+            content.putString(body == null ? "" : body);
+            Clipboard.getSystemClipboard().setContent(content);
+            copyBtn.setText("Copied!");
+            javafx.application.Platform.runLater(() -> {
+                try { Thread.sleep(1200); } catch (InterruptedException ignored) {}
+                copyBtn.setText("Copy");
+            });
+        });
+        header.getChildren().addAll(langLabel, spacer, copyBtn);
 
-        Text spacer = new Text("\n");
-        spacer.setStyle("-fx-fill: " + TEXT_COLOR + ";");
-        flow.getChildren().add(spacer);
+        // Code body with real syntax highlighting
+        TextFlow code = buildHighlightedCode(body == null ? "" : body, lang);
+        code.setStyle("-fx-padding: 8 12; -fx-background-color: " + CODE_BG + "; " +
+                "-fx-background-radius: 0 0 4 4;");
+
+        block.getChildren().addAll(header, code);
+        root.getChildren().add(block);
     }
 
-    /** Minimal tinting for Java / JS / Python style snippets. */
-    private static String tintCode(String body, String lang) {
-        if (body == null || body.isEmpty()) return "";
-        // We could split into multiple Text nodes here for true syntax
-        // highlighting; for now we keep the snippet monospaced on a
-        // dark background, which is what most chat UIs do for code.
-        return body;
+    private static TextFlow buildHighlightedCode(String body, String lang) {
+        TextFlow flow = new TextFlow();
+        flow.setLineSpacing(1);
+        try {
+            String language = lang == null || lang.isEmpty() ? "text" : lang;
+            StyleSpans<Collection<String>> spans =
+                    SyntaxHighlighter.computeHighlightingForLanguage(body, language);
+            int pos = 0;
+            for (StyleSpan<Collection<String>> span : spans) {
+                int len = span.getLength();
+                if (len <= 0) continue;
+                int end = Math.min(body.length(), pos + len);
+                if (end <= pos) continue;
+                String piece = body.substring(pos, end);
+                Text t = new Text(piece);
+                t.setStyle(styleForSpan(span.getStyle()));
+                t.setFont(Font.font("JetBrains Mono", 12));
+                flow.getChildren().add(t);
+                pos = end;
+            }
+        } catch (Throwable ignored) {
+            // Fall back to a single monospaced text
+            Text t = new Text(body);
+            t.setStyle("-fx-fill: " + TEXT_COLOR + "; -fx-font-family: 'JetBrains Mono','Consolas',monospace;");
+            flow.getChildren().add(t);
+        }
+        return flow;
+    }
+
+    private static String styleForSpan(Collection<String> classes) {
+        String fill = TEXT_COLOR;
+        String extra = "";
+        if (classes.contains("keyword"))   { fill = KEYWORD_COLOR;  extra = " -fx-font-weight: bold;"; }
+        if (classes.contains("string"))    { fill = STRING_COLOR;   }
+        if (classes.contains("comment"))   { fill = COMMENT_COLOR;  extra = " -fx-font-style: italic;"; }
+        if (classes.contains("number"))    { fill = NUMBER_COLOR;   }
+        if (classes.contains("function"))  { fill = FUNCTION_COLOR; }
+        if (classes.contains("type"))      { fill = TYPE_COLOR;     }
+        if (classes.contains("annotation")){ fill = FUNCTION_COLOR; }
+        if (classes.contains("tag"))       { fill = TAG_COLOR;      extra = " -fx-font-weight: bold;"; }
+        if (classes.contains("attribute")) { fill = ATTR_COLOR;     }
+        if (classes.contains("property"))  { fill = PROP_COLOR;     }
+        if (classes.contains("builtin"))   { fill = FUNCTION_COLOR; }
+        return "-fx-fill: " + fill + ";" + extra;
     }
 }

@@ -1,5 +1,6 @@
 package com.phiigrame.components;
 
+import com.phiigrame.ai.AgentApprovalPolicy;
 import com.phiigrame.ai.AiTool;
 import com.phiigrame.ai.ToolCallParser;
 import com.phiigrame.ai.ToolRegistry;
@@ -10,6 +11,7 @@ import com.phiigrame.services.AuthService;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
@@ -22,11 +24,15 @@ import java.util.Map;
 
 /**
  * AI chat panel - right sidebar that allows the user to chat with the
- * configured AI model. Stores conversation in AiHistoryService.
+ * configured AI model.  Stores conversation history in
+ * {@link AiHistoryService}.
  *
  * <p>The editor works without a login, but starting a chat requires one
  * (the {@link AuthService} is consulted on every send).  The model can
  * also call a {@link ToolRegistry} of file tools while answering.
+ *
+ * <p>Assistant replies are streamed: tokens are pushed one at a time
+ * into the live bubble so the user can see the answer forming.
  */
 public class AiChatPanel extends VBox {
 
@@ -34,6 +40,7 @@ public class AiChatPanel extends VBox {
     private final AiHistoryService historyService;
     private final AuthService authService;
     private final ToolRegistry toolRegistry;
+    private final AgentApprovalPolicy policy = new AgentApprovalPolicy();
 
     private ScrollPane messagesScroll;
     private VBox messagesBox;
@@ -46,6 +53,11 @@ public class AiChatPanel extends VBox {
     private ComboBox<String> sessionCombo;
     private String currentSessionId;
     private boolean busy = false;
+
+    // Streaming state
+    private VBox streamingBubble;
+    private StringBuilder streamingText = new StringBuilder();
+    private boolean streaming = false;
 
     public AiChatPanel(AiService aiService, AiHistoryService historyService,
                        AuthService authService, ToolRegistry toolRegistry) {
@@ -80,7 +92,6 @@ public class AiChatPanel extends VBox {
         headerLabel.setStyle("-fx-text-fill: #cccccc; -fx-font-weight: bold; -fx-font-size: 12px;");
         HBox.setHgrow(headerLabel, Priority.ALWAYS);
 
-        // Login / current user button
         loginButton = new Button();
         loginButton.setStyle("-fx-background-color: #0e639c; -fx-text-fill: white; " +
                 "-fx-font-size: 11px; -fx-padding: 4 10; -fx-background-radius: 4; -fx-cursor: hand;");
@@ -100,7 +111,27 @@ public class AiChatPanel extends VBox {
         historyBtn.setTooltip(new Tooltip("Show history"));
         historyBtn.setOnAction(e -> showHistoryDialog());
 
-        header.getChildren().addAll(headerLabel, loginButton, historyBtn, newChatBtn);
+        // Agent mode toggle - lets the AI chain tools (read/edit/bash/git)
+        ToggleButton agentBtn = new ToggleButton("Agent");
+        agentBtn.setStyle("-fx-background-color: transparent; -fx-text-fill: #cccccc; " +
+                "-fx-cursor: hand; -fx-min-height: 24; -fx-padding: 0 8; -fx-background-radius: 4;");
+        agentBtn.setTooltip(new Tooltip("Agent mode: the AI can read, edit and run commands. " +
+                "You approve destructive actions in a dialog."));
+        agentBtn.setSelected(policy.getMode() == AgentApprovalPolicy.Mode.AGENT);
+        agentBtn.setOnAction(e -> {
+            policy.setMode(agentBtn.isSelected()
+                    ? AgentApprovalPolicy.Mode.AGENT
+                    : AgentApprovalPolicy.Mode.OFF);
+            String text = agentBtn.isSelected() ? "Agent" : "Chat";
+            agentBtn.setText(text);
+            agentBtn.setStyle((agentBtn.isSelected()
+                    ? "-fx-background-color: #0e639c; -fx-text-fill: white; "
+                    : "-fx-background-color: transparent; -fx-text-fill: #cccccc; ") +
+                    "-fx-cursor: hand; -fx-min-height: 24; -fx-padding: 0 8; " +
+                    "-fx-background-radius: 4; -fx-font-weight: bold;");
+        });
+
+        header.getChildren().addAll(headerLabel, agentBtn, loginButton, historyBtn, newChatBtn);
 
         // Session selector
         HBox sessionRow = new HBox(8);
@@ -117,7 +148,7 @@ public class AiChatPanel extends VBox {
         });
         sessionRow.getChildren().addAll(sessionLabel, sessionCombo);
 
-        // Messages area (rich-text markdown)
+        // Messages area
         messagesBox = new VBox(8);
         messagesBox.setPadding(new Insets(10, 12, 10, 12));
         messagesBox.setStyle("-fx-background-color: #1e1e1e;");
@@ -128,14 +159,15 @@ public class AiChatPanel extends VBox {
                 "-fx-border-color: transparent;");
         VBox.setVgrow(messagesScroll, Priority.ALWAYS);
 
-        // Quick actions
+        // Quick actions (more useful prompts, with tooltips)
         HBox quickActions = new HBox(4);
-        quickActions.setStyle("-fx-background-color: #2d2d2d; -fx-padding: 4 12;");
+        quickActions.setStyle("-fx-background-color: #2d2d2d; -fx-padding: 4 12; -fx-alignment: center-left;");
         for (String[] action : new String[][] {
-            {"Explain", "Explain the selected code"},
-            {"Refactor", "Refactor the selected code"},
-            {"Document", "Generate documentation"},
-            {"Tests", "Generate unit tests"}
+            {"Explain",   "Explain the selected code in 2-3 sentences."},
+            {"Refactor",  "Refactor the selected code. Return only the new code."},
+            {"Document",  "Add Javadoc comments to the selected code."},
+            {"Tests",     "Generate JUnit 5 unit tests for the selected code."},
+            {"Fix bugs",  "Find and fix any bugs in the selected code."}
         }) {
             Button btn = new Button(action[0]);
             btn.setStyle("-fx-background-color: #3e3e3e; -fx-text-fill: #cccccc; -fx-font-size: 10px; " +
@@ -171,7 +203,10 @@ public class AiChatPanel extends VBox {
         stopButton = new Button("Stop");
         stopButton.setStyle("-fx-background-color: #5a2828; -fx-text-fill: white; " +
                 "-fx-padding: 6 14; -fx-background-radius: 4; -fx-cursor: hand;");
-        stopButton.setOnAction(e -> aiService.shutdown());
+        stopButton.setOnAction(e -> {
+            aiService.shutdown();
+            finishStreaming("Stopped.");
+        });
         stopButton.setMinWidth(70);
         stopButton.setDisable(true);
 
@@ -194,7 +229,6 @@ public class AiChatPanel extends VBox {
         getChildren().addAll(header, sessionRow, messagesScroll, quickActions, inputRow, statusLabel);
     }
 
-    /** Update header / input / send button to reflect the current login state. */
     public void applyLoginState() {
         boolean loggedIn = authService != null && authService.isLoggedIn();
         if (loggedIn) {
@@ -259,52 +293,88 @@ public class AiChatPanel extends VBox {
     }
 
     private void appendSystem(String text) {
-        appendBubble("system", "[system] " + text);
+        appendBubble("system", text);
     }
 
-    /**
-     * Render a single message bubble.  Assistant messages are rendered as
+    /** Render a single message bubble.  Assistant messages are rendered as
      * Markdown, while user/system messages are plain text on a colored
-     * background.  The bubble auto-scrolls into view.
-     */
-    private void appendBubble(String role, String content) {
+     * background.  The bubble auto-scrolls into view. */
+    private VBox appendBubble(String role, String content) {
         if (content == null) content = "";
         VBox bubble = new VBox(4);
         bubble.setFillWidth(true);
         String label;
         String bg;
+        String styleClass;
         switch (role) {
             case "user":
                 label = "You";
                 bg = "#2d2d30";
+                styleClass = "ai-bubble-user";
                 break;
             case "system":
                 label = "system";
                 bg = "#252526";
+                styleClass = "ai-bubble-system";
                 break;
             default:
                 label = "AI";
-                bg = "#1e1e1e";
+                bg = "#252526";
+                styleClass = "ai-bubble-assistant";
         }
+        bubble.getStyleClass().add(styleClass);
         Label header = new Label(label);
         header.setStyle("-fx-text-fill: #8b8b8b; -fx-font-size: 10px; -fx-font-weight: bold;");
         bubble.getChildren().add(header);
 
-        if ("user".equals(role) || "system".equals(role)) {
-            Label body = new Label(content);
-            body.setWrapText(true);
-            body.setStyle("-fx-text-fill: #d4d4d4; -fx-font-size: 12px;");
-            bubble.getChildren().add(body);
+        Node body;
+        if ("user".equals(role)) {
+            Label l = new Label(content);
+            l.setWrapText(true);
+            l.setStyle("-fx-text-fill: #d4d4d4; -fx-font-size: 12px;");
+            body = l;
+        } else if ("system".equals(role)) {
+            Label l = new Label(content);
+            l.setWrapText(true);
+            l.setStyle("-fx-text-fill: #888888; -fx-font-size: 11px; -fx-font-style: italic;");
+            body = l;
         } else {
-            bubble.getChildren().add(MarkdownRenderer.render(content));
+            body = MarkdownRenderer.render(content);
         }
+        bubble.getChildren().add(body);
 
         bubble.setPadding(new Insets(8, 10, 8, 10));
         bubble.setStyle("-fx-background-color: " + bg + "; -fx-background-radius: 6;");
 
         messagesBox.getChildren().add(bubble);
-        // Auto-scroll to the bottom
         Platform.runLater(() -> messagesScroll.setVvalue(1.0));
+        return bubble;
+    }
+
+    /**
+     * Create an empty assistant bubble that will be filled token by token
+     * as the model streams output.  Returns the bubble so the streaming
+     * loop can replace its body.
+     */
+    private VBox startStreamingBubble() {
+        VBox bubble = new VBox(4);
+        bubble.setFillWidth(true);
+        bubble.getStyleClass().add("ai-bubble-assistant");
+        Label header = new Label("AI  -  thinking");
+        header.setStyle("-fx-text-fill: #8b8b8b; -fx-font-size: 10px; -fx-font-weight: bold;");
+        bubble.getChildren().add(header);
+
+        Label body = new Label("");
+        body.setWrapText(true);
+        body.setStyle("-fx-text-fill: #d4d4d4; -fx-font-size: 12px;");
+        bubble.getChildren().add(body);
+
+        bubble.setPadding(new Insets(8, 10, 8, 10));
+        bubble.setStyle("-fx-background-color: #252526; -fx-background-radius: 6;");
+
+        messagesBox.getChildren().add(bubble);
+        Platform.runLater(() -> messagesScroll.setVvalue(1.0));
+        return bubble;
     }
 
     private void ensureSession() {
@@ -321,7 +391,6 @@ public class AiChatPanel extends VBox {
         List<AiHistoryService.AiSession> all = historyService.getAllSessions();
         sessionCombo.getItems().clear();
         for (AiHistoryService.AiSession s : all) {
-            String label = s.title + "  -  " + historyService.formatTimestamp(s.lastModified);
             sessionCombo.getItems().add(s.id);
         }
         if (currentSessionId != null) {
@@ -418,7 +487,6 @@ public class AiChatPanel extends VBox {
 
     private void setBusy(boolean b) {
         busy = b;
-        // don't re-enable the send button here if the user isn't logged in
         boolean loggedIn = authService != null && authService.isLoggedIn();
         sendButton.setDisable(b || !loggedIn);
         stopButton.setDisable(!b);
@@ -428,7 +496,6 @@ public class AiChatPanel extends VBox {
     private void sendMessage() {
         if (busy) return;
 
-        // Hard-stop if not logged in: prompt the user to sign in.
         if (authService == null || !authService.isLoggedIn()) {
             Alert a = new Alert(Alert.AlertType.INFORMATION,
                     "Please sign in with your Phiigrame Account to chat with the AI. " +
@@ -453,7 +520,6 @@ public class AiChatPanel extends VBox {
             historyService.addMessage(currentSessionId, "user", text);
         }
 
-        // Build history for context
         List<Map<String, String>> history = new ArrayList<>();
         if (session != null) {
             int start = Math.max(0, session.messages.size() - 10);
@@ -470,41 +536,100 @@ public class AiChatPanel extends VBox {
         statusLabel.setStyle("-fx-text-fill: #d4d4d4; -fx-font-size: 10px; " +
                 "-fx-padding: 4 12; -fx-background-color: #1e1e1e;");
 
-        // Run with tool support if we have a registry; fall back to plain chat.
-        if (toolRegistry != null && !toolRegistry.all().isEmpty()) {
-            aiService.chatWithTools(text, history, toolRegistry,
-                    new ToolCallParser.ToolCallback() {
-                        @Override public boolean confirm(AiTool tool, ToolCallParser.ToolCall call) {
-                            return askPermissionForTool(tool, call);
-                        }
-                        @Override public void onResult(AiTool tool, ToolCallParser.ToolCall call, String result) {
-                            // Append a small log so the user can see what happened.
-                            String line = "tool: " + call.name + " -> " + truncate(result, 160);
-                            Platform.runLater(() -> appendBubble("system", line));
-                        }
-                    },
-                    3, // up to 3 tool-using rounds per turn
-                response -> onAssistantResponse(response, true),
-                () -> Platform.runLater(() -> setBusy(false))
-            );
+        // Start the streaming bubble.
+        streamingBubble = startStreamingBubble();
+        streamingText = new StringBuilder();
+        streaming = true;
+
+        if (policy.getMode() == AgentApprovalPolicy.Mode.AGENT) {
+            // Agent mode: run a tool-calling loop.  The model can chain
+            // multiple tool calls; results are appended to the
+            // conversation until the model emits a final answer with
+            // no tool calls.
+            ToolCallParser.ToolCallback callback = new ToolCallParser.ToolCallback() {
+                @Override public boolean confirm(AiTool tool, ToolCallParser.ToolCall call) {
+                    if (policy.canAutoApprove(tool)) {
+                        appendToolEvent(tool, call, "auto-approved", null);
+                        return true;
+                    }
+                    return askPermissionForTool(tool, call);
+                }
+                @Override public void onResult(AiTool tool, ToolCallParser.ToolCall call, String result) {
+                    appendToolEvent(tool, call, "ok", result);
+                }
+            };
+            aiService.chatWithTools(text, history, toolRegistry, callback, 8,
+                    response -> Platform.runLater(() -> onAssistantResponse(response, true)),
+                    () -> Platform.runLater(() -> finishStreaming(null)));
         } else {
-            aiService.chat(text, history,
-                response -> onAssistantResponse(response, true),
-                () -> Platform.runLater(() -> setBusy(false))
-            );
+            aiService.chatStream(text, history,
+                    token -> onStreamToken(token),
+                    response -> Platform.runLater(() -> onAssistantResponse(response, true)),
+                    () -> Platform.runLater(() -> finishStreaming(null)));
         }
     }
 
+    private void onStreamToken(String token) {
+        if (!streaming || streamingBubble == null) return;
+        streamingText.append(token);
+        // Replace the body of the streaming bubble with a fresh render of
+        // the accumulated text.  We use a plain Label while the model is
+        // still streaming because Markdown re-rendering every token would
+        // be janky; once the model is done we render the final result
+        // with full Markdown (code blocks, syntax highlighting, ...).
+        String current = streamingText.toString();
+        Label body = (Label) streamingBubble.getChildren().get(1);
+        body.setText(current);
+        Platform.runLater(() -> messagesScroll.setVvalue(1.0));
+    }
+
     private void onAssistantResponse(String response, boolean save) {
-        // Strip any ```tool ... ``` blocks from the displayed text.  The
-        // tool log bubbles already tell the user what happened; the raw
-        // JSON would be noisy.
-        String display = stripToolBlocks(response);
-        appendBubble("assistant", display);
-        if (save) {
+        // Streaming finished.  Strip tool blocks and re-render the
+        // bubble with full Markdown so the user sees code blocks,
+        // syntax highlighting and a copy button.
+        String display = stripToolBlocks(response == null ? "" : response);
+        if (streamingBubble != null) {
+            // Replace the body with the rendered Markdown.
+            streamingBubble.getChildren().set(1, MarkdownRenderer.render(display));
+            streamingBubble = null;
+        } else {
+            appendBubble("assistant", display);
+        }
+        if (save && currentSessionId != null) {
             historyService.addMessage(currentSessionId, "assistant", response);
         }
         refreshSessions();
+        streaming = false;
+    }
+
+    private void finishStreaming(String replacement) {
+        if (!streaming) {
+            setBusy(false);
+            boolean available = aiService.getLastError() == null;
+            updateStatus(available);
+            return;
+        }
+        if (replacement != null) {
+            // User clicked "Stop" mid-stream: replace the partial
+            // output with a marker.
+            String current = streamingText.toString();
+            onAssistantResponse(current + "\n\n_[" + replacement + "]_", false);
+        } else {
+            // Normal completion - if no onAssistantResponse arrived
+            // (shouldn't happen but be safe), re-render the current
+            // text via Markdown.
+            String current = streamingText.toString();
+            if (streamingBubble != null) {
+                streamingBubble.getChildren().set(1,
+                        MarkdownRenderer.render(stripToolBlocks(current)));
+                streamingBubble = null;
+            }
+            if (currentSessionId != null && !current.isEmpty()) {
+                historyService.addMessage(currentSessionId, "assistant", current);
+            }
+            refreshSessions();
+            streaming = false;
+        }
         setBusy(false);
         boolean available = aiService.getLastError() == null;
         updateStatus(available);
@@ -519,39 +644,90 @@ public class AiChatPanel extends VBox {
 
     /**
      * Ask the user to confirm a destructive tool call.  Read-only tools
-     * (read_file, list_dir) are auto-approved because they make no changes.
+     * are auto-approved via the policy; this dialog only appears for
+     * write/destructive tools.  Includes a "Remember my choice for
+     * this tool" checkbox so the user does not have to re-approve the
+     * same action 30 times in a row.
      */
     private boolean askPermissionForTool(AiTool tool, ToolCallParser.ToolCall call) {
-        String name = tool.name();
-        // Auto-approve read-only tools
-        if ("read_file".equals(name) || "list_dir".equals(name)) return true;
+        if (policy.canAutoApprove(tool)) return true;
 
-        // For everything else, build a modal confirmation on the FX thread.
         final boolean[] result = {false};
         Runnable prompt = () -> {
             String args = call.args == null || call.args.isEmpty()
                     ? "(no arguments)"
                     : call.args.toString();
             Alert a = new Alert(Alert.AlertType.CONFIRMATION,
-                    "The AI wants to call: " + name + "\n\nArguments:\n" + args +
-                            "\n\nAllow this change?",
+                    "Tool: " + tool.name() + "  (risk: " + tool.risk() + ")\n\n" +
+                            "Arguments:\n" + args + "\n\nAllow this?",
                     ButtonType.CANCEL, ButtonType.OK);
-            a.setTitle("AI tool permission");
-            a.setHeaderText("Phiigrame AI wants to modify your project");
-            a.showAndWait().ifPresent(bt -> result[0] = (bt == ButtonType.OK));
+            a.setTitle("AI agent wants to act");
+            a.setHeaderText("Phiigrame AI is requesting permission");
+            // "Always allow" checkbox
+            CheckBox remember = new CheckBox("Always allow '" + tool.name() + "' this session");
+            remember.setStyle("-fx-text-fill: #d4d4d4;");
+            a.getDialogPane().setExpandableContent(remember);
+            a.getDialogPane().setExpanded(true);
+            a.showAndWait().ifPresent(bt -> {
+                if (bt == ButtonType.OK) {
+                    result[0] = true;
+                    if (remember.isSelected()) {
+                        policy.rememberAlwaysAllow(tool.name());
+                    }
+                }
+            });
         };
         if (Platform.isFxApplicationThread()) prompt.run();
         else Platform.runLater(prompt);
-        // Block until the user answers.
-        long deadline = System.currentTimeMillis() + 60_000L;
+        long deadline = System.currentTimeMillis() + 60_000L * 5; // 5min for human
         while (System.currentTimeMillis() < deadline) {
             try { Thread.sleep(50); } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 return false;
             }
+            // result[0] is set on the FX thread; we observe it from here
             if (result[0]) break;
+            // If the user closed the dialog without clicking OK,
+            // result[0] stays false but the FX loop is idle - bail out
+            // when the deadline is reached.
         }
         return result[0];
+    }
+
+    /**
+     * Append a small "tool call" line to the chat so the user can see
+     * what the agent did.  The bubble is intentionally tiny and
+     * collapsed-by-default: a single label showing the tool name, args
+     * (truncated), and outcome.
+     */
+    private void appendToolEvent(AiTool tool, ToolCallParser.ToolCall call, String status, String result) {
+        if (tool == null || call == null) return;
+        HBox row = new HBox(6);
+        row.setAlignment(Pos.CENTER_LEFT);
+        String args = call.args == null || call.args.isEmpty()
+                ? ""
+                : " " + truncate(call.args.toString(), 60);
+        String label = "\u2699 " + tool.name() + args + " \u2192 " + status;
+        Label l = new Label(label);
+        String color;
+        switch (status) {
+            case "ok": color = "#6a9955"; break;
+            case "auto-approved": color = "#8b8b8b"; break;
+            case "denied": color = "#f48771"; break;
+            case "error": color = "#f48771"; break;
+            default: color = "#d4d4d4";
+        }
+        l.setStyle("-fx-text-fill: " + color + "; -fx-font-size: 10px; " +
+                "-fx-font-family: 'JetBrains Mono', monospace;");
+        row.getChildren().add(l);
+        if (result != null && !result.isEmpty() && result.length() < 200) {
+            Label r = new Label(" " + truncate(result.replace('\n', ' '), 60));
+            r.setStyle("-fx-text-fill: #6a6a6a; -fx-font-size: 10px; " +
+                    "-fx-font-family: 'JetBrains Mono', monospace;");
+            row.getChildren().add(r);
+        }
+        messagesBox.getChildren().add(row);
+        Platform.runLater(() -> messagesScroll.setVvalue(1.0));
     }
 
     private static String truncate(String s, int max) {
@@ -564,10 +740,11 @@ public class AiChatPanel extends VBox {
         if (busy) return;
         String prompt;
         switch (action) {
-            case "Explain": prompt = "Explain the selected code in 2-3 sentences."; break;
+            case "Explain":  prompt = "Explain the selected code in 2-3 sentences."; break;
             case "Refactor": prompt = "Refactor the selected code to be cleaner. Return only the refactored code."; break;
             case "Document": prompt = "Generate Javadoc comments for the selected code. Return only the commented code."; break;
-            case "Tests": prompt = "Generate JUnit 5 unit tests for the selected code. Return only the test code."; break;
+            case "Tests":    prompt = "Generate JUnit 5 unit tests for the selected code. Return only the test code."; break;
+            case "Fix bugs": prompt = "Find and fix any bugs in the selected code. Return only the corrected code."; break;
             default: prompt = action;
         }
         inputArea.setText(prompt);

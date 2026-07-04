@@ -1,12 +1,19 @@
 package com.phiigrame.components;
 
+import com.phiigrame.services.UserDatabase;
+import com.phiigrame.services.UserDatabase.Recent;
 import javafx.animation.FadeTransition;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
+import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.input.MouseButton;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -14,6 +21,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 
+import java.awt.Desktop;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,7 +29,13 @@ import java.util.function.Consumer;
 
 /**
  * Modern welcome view embedded in the main IDE window.
- * Designed to match the modern IntelliJ IDEA 2024+ style.
+ *
+ * Layout: the "Projects" tab is the default and mirrors IntelliJ IDEA's
+ * welcome screen - logo + tagline + three action buttons on the left,
+ * a tall list of recent projects on the right with right-click actions.
+ * Other sidebar items (Plugins / Learn / Customize / Remote) still
+ * render in-place; the previous bug where they jumped to the host
+ * shell is preserved as a no-op so any cached callbacks stay safe.
  */
 public class WelcomeView extends BorderPane {
 
@@ -33,22 +47,23 @@ public class WelcomeView extends BorderPane {
     private final Runnable onShowLearn;
     private final Runnable onShowCustomize;
     private final Runnable onShowRemote;
-    /** Callback used by the "Projects" item to clear the selection state when the user navigates back. */
-    private final Runnable onShowProjects;
+    private final UserDatabase userDb;
 
-    /** Sidebar buttons; only one is highlighted at a time. */
     private final List<Button> navButtons = new ArrayList<>();
-    /** Currently selected section id, e.g. "projects". */
     private String selectedSection = "projects";
-    /** Holds the main content area so we can swap sections in place. */
     private BorderPane contentHolder;
+
+    // The recents list VBox - kept around so we can refresh it in place
+    // after a "Remove from recents" right-click without rebuilding the
+    // whole Projects section.
+    private VBox recentsContainer;
 
     public WelcomeView(Consumer<File> onOpenProject,
                        Runnable onCreateProject,
                        Runnable onOpenFromVcs,
                        Consumer<File> onOpenRecent) {
         this(onOpenProject, onCreateProject, onOpenFromVcs, onOpenRecent,
-                () -> {}, () -> {}, () -> {}, () -> {});
+                () -> {}, () -> {}, () -> {}, () -> {}, null);
     }
 
     public WelcomeView(Consumer<File> onOpenProject,
@@ -58,7 +73,8 @@ public class WelcomeView extends BorderPane {
                        Runnable onShowPlugins,
                        Runnable onShowLearn,
                        Runnable onShowCustomize,
-                       Runnable onShowRemote) {
+                       Runnable onShowRemote,
+                       UserDatabase userDb) {
         this.onOpenProject = onOpenProject;
         this.onCreateProject = onCreateProject;
         this.onOpenFromVcs = onOpenFromVcs;
@@ -67,7 +83,7 @@ public class WelcomeView extends BorderPane {
         this.onShowLearn = onShowLearn;
         this.onShowCustomize = onShowCustomize;
         this.onShowRemote = onShowRemote;
-        this.onShowProjects = () -> selectSection("projects");
+        this.userDb = userDb;
 
         getStyleClass().add("welcome-root");
         setLeft(createSidebar());
@@ -75,6 +91,8 @@ public class WelcomeView extends BorderPane {
         contentHolder.setCenter(createProjectsContent());
         setCenter(contentHolder);
     }
+
+    // ---------------------------------------------------------------- sidebar
 
     private VBox createSidebar() {
         VBox sidebar = new VBox(2);
@@ -93,14 +111,13 @@ public class WelcomeView extends BorderPane {
             navButtons.add(navBtn);
             sidebar.getChildren().add(navBtn);
         }
-        // Highlight Projects by default
         applySelectedStyle();
 
         Region spacer = new VBox();
         VBox.setVgrow(spacer, Priority.ALWAYS);
         sidebar.getChildren().add(spacer);
 
-        Label version = new Label("2024.1");
+        Label version = new Label("2026.1");
         version.getStyleClass().add("welcome-version");
         version.setPadding(new Insets(0, 0, 0, 18));
         sidebar.getChildren().add(version);
@@ -127,20 +144,19 @@ public class WelcomeView extends BorderPane {
             case "learn" -> createLearnContent();
             case "customization" -> createCustomizationContent();
             case "remote" -> createRemoteContent();
-            default -> createProjectsContent();
+            default -> {
+                // Re-query recents on every visit to the Projects section
+                // so the list reflects projects the user opened from
+                // elsewhere (file menu, recent click, etc.).
+                yield createProjectsContent();
+            }
         };
-        // Swap content directly - the user reported the previous fade-out
-        // transition was making clicks feel unresponsive, and we want
-        // instant feedback when they tap a sidebar item.
         contentHolder.setCenter(section);
         section.setOpacity(0);
         FadeTransition fadeIn = new FadeTransition(Duration.millis(140), section);
         fadeIn.setFromValue(0.0);
         fadeIn.setToValue(1.0);
         fadeIn.play();
-        // Navigation inside the welcome view never leaves the welcome view.
-        // The "Open Plugins tab" / similar buttons inside each section are
-        // the only way to hand off to the host shell.
     }
 
     private void applySelectedStyle() {
@@ -154,7 +170,7 @@ public class WelcomeView extends BorderPane {
         }
     }
 
-    // ---- sections ------------------------------------------------------------
+    // -------------------------------------------------------------- Projects
 
     private ScrollPane createProjectsContent() {
         ScrollPane scroll = new ScrollPane();
@@ -164,13 +180,271 @@ public class WelcomeView extends BorderPane {
 
         HBox root = new HBox();
         root.setStyle("-fx-background-color: #1e1e1e;");
-        root.setPadding(new Insets(60, 60, 60, 60));
-        root.setSpacing(60);
+        root.setPadding(new Insets(40, 50, 40, 50));
+        root.setSpacing(40);
         root.getChildren().addAll(createLeftPanel(), createRightPanel());
 
         scroll.setContent(root);
         return scroll;
     }
+
+    private VBox createLeftPanel() {
+        VBox panel = new VBox();
+        panel.setAlignment(Pos.TOP_LEFT);
+        panel.setSpacing(18);
+        HBox.setHgrow(panel, Priority.ALWAYS);
+
+        // Big in-app logo
+        try {
+            javafx.scene.image.ImageView logoView = new javafx.scene.image.ImageView(
+                new javafx.scene.image.Image(getClass().getResourceAsStream("/logo-in-app.png")));
+            logoView.setFitHeight(180);
+            logoView.setPreserveRatio(true);
+            logoView.setSmooth(true);
+            HBox logoContainer = new HBox(logoView);
+            logoContainer.setAlignment(Pos.CENTER_LEFT);
+            panel.getChildren().add(logoContainer);
+        } catch (Exception ex) {
+            Label title = new Label("Welcome to Phiigrame");
+            title.getStyleClass().add("welcome-title");
+            panel.getChildren().add(title);
+        }
+
+        Label subtitle = new Label("Smart IDE for Kotlin, Java, and Groovy with built-in local AI");
+        subtitle.getStyleClass().add("welcome-subtitle");
+        subtitle.setWrapText(true);
+        panel.getChildren().add(subtitle);
+
+        VBox actions = new VBox(10);
+        actions.setMaxWidth(420);
+
+        Button newProjectBtn = createActionButton(
+            "New Project",
+            "Create a new project from scratch",
+            true
+        );
+        newProjectBtn.setOnAction(e -> onCreateProject.run());
+        actions.getChildren().add(newProjectBtn);
+
+        Button openProjectBtn = createActionButton(
+            "Open",
+            "Open an existing project from disk",
+            false
+        );
+        openProjectBtn.setOnAction(e -> {
+            javafx.stage.DirectoryChooser chooser = new javafx.stage.DirectoryChooser();
+            chooser.setTitle("Open Project");
+            File selectedDir = chooser.showDialog(getScene().getWindow());
+            if (selectedDir != null) {
+                onOpenProject.accept(selectedDir);
+            }
+        });
+        actions.getChildren().add(openProjectBtn);
+
+        Button vcsBtn = createActionButton(
+            "Get from Version Control",
+            "Check out a project from Git, Mercurial, or Subversion",
+            false
+        );
+        vcsBtn.setOnAction(e -> onOpenFromVcs.run());
+        actions.getChildren().add(vcsBtn);
+
+        panel.getChildren().add(actions);
+
+        // Tip footer
+        Label tip = new Label("Tip: right-click a recent project to open it in a new window, " +
+                "show it in Explorer, or remove it from the list.");
+        tip.setStyle("-fx-text-fill: #4d4d4d; -fx-font-size: 11px; -fx-padding: 16 0 0 0;");
+        tip.setWrapText(true);
+        tip.setMaxWidth(420);
+        panel.getChildren().add(tip);
+
+        return panel;
+    }
+
+    /**
+     * Right column - the IntelliJ-style recent-projects list.  Each row
+     * shows the project name, full path, current Git branch (if any), and
+     * "Last opened N days ago".
+     */
+    private VBox createRightPanel() {
+        VBox panel = new VBox(8);
+        panel.setAlignment(Pos.TOP_LEFT);
+        panel.setMinWidth(420);
+        panel.setMaxWidth(460);
+        HBox.setHgrow(panel, Priority.NEVER);
+
+        HBox header = new HBox();
+        header.setAlignment(Pos.CENTER_LEFT);
+        Label recentTitle = new Label("Recent Projects");
+        recentTitle.getStyleClass().add("welcome-section-title");
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        header.getChildren().addAll(recentTitle, spacer);
+
+        // "Clear all" mini-button
+        if (userDb != null) {
+            Button clearAll = new Button("Clear All");
+            clearAll.setStyle("-fx-background-color: transparent; -fx-text-fill: #6a9955; " +
+                    "-fx-font-size: 11px; -fx-cursor: hand; -fx-padding: 4 8;");
+            clearAll.setOnAction(e -> {
+                Alert a = new Alert(Alert.AlertType.CONFIRMATION,
+                        "Remove all recent projects from the list?",
+                        ButtonType.YES, ButtonType.NO);
+                a.setHeaderText(null);
+                a.setTitle("Clear recents");
+                if (a.showAndWait().orElse(ButtonType.NO) == ButtonType.YES) {
+                    userDb.clearRecents();
+                    refreshRecents();
+                }
+            });
+            header.getChildren().add(clearAll);
+        }
+        panel.getChildren().add(header);
+
+        recentsContainer = new VBox(6);
+        recentsContainer.setPadding(new Insets(8, 0, 0, 0));
+        populateRecents();
+        panel.getChildren().add(recentsContainer);
+
+        return panel;
+    }
+
+    private void populateRecents() {
+        recentsContainer.getChildren().clear();
+        if (userDb == null) {
+            Label empty = new Label("No recent projects");
+            empty.setStyle("-fx-text-fill: #6e7681; -fx-font-size: 12px; -fx-padding: 8 0;");
+            recentsContainer.getChildren().add(empty);
+            return;
+        }
+        List<Recent> recents = userDb.listRecents();
+        if (recents.isEmpty()) {
+            Label empty = new Label("No recent projects — open or create one to get started.");
+            empty.setStyle("-fx-text-fill: #6e7681; -fx-font-size: 12px; -fx-padding: 8 0;");
+            empty.setWrapText(true);
+            empty.setMaxWidth(440);
+            recentsContainer.getChildren().add(empty);
+            return;
+        }
+        for (Recent r : recents) {
+            recentsContainer.getChildren().add(createRecentItem(r));
+        }
+    }
+
+    private void refreshRecents() {
+        if (recentsContainer != null) {
+            populateRecents();
+        }
+    }
+
+    private VBox createRecentItem(Recent r) {
+        File file = new File(r.path);
+        VBox item = new VBox(2);
+        item.getStyleClass().add("welcome-recent-item");
+        item.setPadding(new Insets(10, 12, 10, 12));
+        item.setMaxWidth(440);
+
+        // Top row: name + branch badge
+        HBox topRow = new HBox(8);
+        topRow.setAlignment(Pos.CENTER_LEFT);
+
+        Label name = new Label(r.name);
+        name.getStyleClass().add("welcome-recent-name");
+        HBox.setHgrow(name, Priority.ALWAYS);
+        topRow.getChildren().add(name);
+
+        if (r.branch != null && !r.branch.isEmpty()) {
+            Label branchBadge = new Label(r.branch);
+            branchBadge.setStyle("-fx-background-color: #2d4a2d; -fx-text-fill: #6a9955; " +
+                    "-fx-font-size: 10px; -fx-padding: 2 8; -fx-background-radius: 8; " +
+                    "-fx-border-color: #3a5f3a; -fx-border-radius: 8;");
+            topRow.getChildren().add(branchBadge);
+        }
+        item.getChildren().add(topRow);
+
+        // Bottom row: path + "last opened" relative timestamp
+        HBox bottomRow = new HBox(8);
+        bottomRow.setAlignment(Pos.CENTER_LEFT);
+        Label path = new Label(r.path);
+        path.getStyleClass().add("welcome-recent-path");
+        path.setEllipsisString("…");
+        HBox.setHgrow(path, Priority.ALWAYS);
+        bottomRow.getChildren().add(path);
+
+        String rel = relativeTime(r.lastOpened);
+        Label ts = new Label(rel);
+        ts.setStyle("-fx-text-fill: #4d4d4d; -fx-font-size: 10px;");
+        bottomRow.getChildren().add(ts);
+        item.getChildren().add(bottomRow);
+
+        // Dim the row if the folder has been deleted on disk.
+        boolean exists = file.exists();
+        item.setOpacity(exists ? 1.0 : 0.55);
+        if (!exists) {
+            Label missing = new Label("Folder no longer exists — right-click to remove.");
+            missing.setStyle("-fx-text-fill: #f48771; -fx-font-size: 10px;");
+            item.getChildren().add(missing);
+        }
+
+        // Single click - open.  Right click - context menu.
+        item.setOnMouseClicked(e -> {
+            if (e.getButton() == MouseButton.PRIMARY && exists) {
+                onOpenRecent.accept(file);
+            }
+        });
+
+        ContextMenu cm = new ContextMenu();
+        MenuItem open = new MenuItem("Open");
+        open.setOnAction(e -> { if (exists) onOpenRecent.accept(file); });
+        MenuItem showInExplorer = new MenuItem("Show in Explorer");
+        showInExplorer.setOnAction(e -> showInExplorer(file));
+        MenuItem remove = new MenuItem("Remove from Recent Projects");
+        remove.setOnAction(e -> {
+            if (userDb != null) {
+                userDb.removeRecent(r.path);
+                refreshRecents();
+            }
+        });
+        cm.getItems().addAll(open, showInExplorer, new javafx.scene.control.SeparatorMenuItem(), remove);
+        item.setOnContextMenuRequested(e -> cm.show(item, e.getScreenX(), e.getScreenY()));
+
+        return item;
+    }
+
+    private static String relativeTime(long ts) {
+        if (ts <= 0) return "";
+        long delta = System.currentTimeMillis() - ts;
+        if (delta < 0) return "just now";
+        long sec = delta / 1000;
+        if (sec < 60) return "just now";
+        long min = sec / 60;
+        if (min < 60) return min + " min ago";
+        long hr = min / 60;
+        if (hr < 24) return hr + " hr ago";
+        long day = hr / 24;
+        if (day < 7) return day + " day" + (day == 1 ? "" : "s") + " ago";
+        if (day < 30) return (day / 7) + " wk ago";
+        if (day < 365) return (day / 30) + " mo ago";
+        return (day / 365) + " yr ago";
+    }
+
+    private void showInExplorer(File f) {
+        if (f == null || !f.exists()) return;
+        try {
+            // Use AWT Desktop for the platform default file manager.
+            if (java.awt.Desktop.isDesktopSupported()
+                    && java.awt.Desktop.getDesktop().isSupported(java.awt.Desktop.Action.OPEN)) {
+                // For a directory Desktop.open opens it directly; for a
+                // file we ask for the parent folder.
+                File target = f.isDirectory() ? f : f.getParentFile();
+                if (target != null) java.awt.Desktop.getDesktop().open(target);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    // ------------------------------------------------------ other sections
 
     private ScrollPane createPluginsContent() {
         VBox body = new VBox(20);
@@ -321,172 +595,33 @@ public class WelcomeView extends BorderPane {
         sp.getStyleClass().add("edge-to-edge");
         return sp;
     }
-    
-    private VBox createLeftPanel() {
-        VBox panel = new VBox();
-        panel.setAlignment(Pos.TOP_LEFT);
-        panel.setSpacing(20);
-        HBox.setHgrow(panel, Priority.ALWAYS);
-        
-        // Big in-app logo as title (replaces logo.png with logo-in-app.png)
-        try {
-            javafx.scene.image.ImageView logoView = new javafx.scene.image.ImageView(
-                new javafx.scene.image.Image(getClass().getResourceAsStream("/logo-in-app.png")));
-            logoView.setFitHeight(220);
-            logoView.setPreserveRatio(true);
-            logoView.setSmooth(true);
-            // Center the logo horizontally
-            HBox logoContainer = new HBox(logoView);
-            logoContainer.setAlignment(Pos.CENTER_LEFT);
-            panel.getChildren().add(logoContainer);
-        } catch (Exception ex) {
-            Label title = new Label("Welcome to Phiigrame");
-            title.getStyleClass().add("welcome-title");
-            panel.getChildren().add(title);
-        }
-        
-        Label subtitle = new Label("Smart IDE for Kotlin, Java, and Groovy with Spring Boot support");
-        subtitle.getStyleClass().add("welcome-subtitle");
-        subtitle.setWrapText(true);
-        panel.getChildren().add(subtitle);
-        
-        VBox actions = new VBox(12);
-        actions.setMaxWidth(400);
-        
-        Button newProjectBtn = createActionButton(
-            "New Project",
-            "Create a new project from scratch",
-            true
-        );
-        newProjectBtn.setOnAction(e -> onCreateProject.run());
-        actions.getChildren().add(newProjectBtn);
-        
-        Button openProjectBtn = createActionButton(
-            "Open",
-            "Open an existing project from disk",
-            false
-        );
-        openProjectBtn.setOnAction(e -> {
-            javafx.stage.DirectoryChooser chooser = new javafx.stage.DirectoryChooser();
-            chooser.setTitle("Open Project");
-            File selectedDir = chooser.showDialog(getScene().getWindow());
-            if (selectedDir != null) {
-                onOpenProject.accept(selectedDir);
-            }
-        });
-        actions.getChildren().add(openProjectBtn);
-        
-        Button vcsBtn = createActionButton(
-            "Get from Version Control",
-            "Check out a project from Git, Mercurial, or Subversion",
-            false
-        );
-        vcsBtn.setOnAction(e -> onOpenFromVcs.run());
-        actions.getChildren().add(vcsBtn);
-        
-        panel.getChildren().add(actions);
-        
-        return panel;
-    }
-    
-    private VBox createRightPanel() {
-        VBox panel = new VBox();
-        panel.setAlignment(Pos.TOP_LEFT);
-        panel.setMinWidth(380);
-        panel.setMaxWidth(380);
-        
-        Label recentTitle = new Label("Recent Projects");
-        recentTitle.getStyleClass().add("welcome-section-title");
-        panel.getChildren().add(recentTitle);
-        
-        VBox recentList = new VBox(8);
-        
-        List<File> recent = getRecentProjects();
-        if (recent.isEmpty()) {
-            Label empty = new Label("No recent projects");
-            empty.setStyle("-fx-text-fill: #6e7681; -fx-font-size: 12px; -fx-padding: 8 0;");
-            recentList.getChildren().add(empty);
-        } else {
-            for (File project : recent) {
-                recentList.getChildren().add(createRecentItem(project));
-            }
-        }
-        
-        panel.getChildren().add(recentList);
-        
-        return panel;
-    }
-    
-    private VBox createRecentItem(File project) {
-        VBox item = new VBox(2);
-        item.getStyleClass().add("welcome-recent-item");
-        
-        Label name = new Label(project.getName());
-        name.getStyleClass().add("welcome-recent-name");
-        
-        Label path = new Label(project.getAbsolutePath());
-        path.getStyleClass().add("welcome-recent-path");
-        
-        item.getChildren().addAll(name, path);
-        item.setOnMouseClicked(e -> {
-            if (project.exists()) {
-                onOpenRecent.accept(project);
-            }
-        });
-        
-        return item;
-    }
-    
-    private List<File> getRecentProjects() {
-        java.util.List<File> recents = new java.util.ArrayList<>();
-        File projectsDir = new File("E:/projects");
-        if (projectsDir.exists() && projectsDir.isDirectory()) {
-            File[] dirs = projectsDir.listFiles(File::isDirectory);
-            if (dirs != null) {
-                java.util.Arrays.sort(dirs, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-                for (File dir : dirs) {
-                    if (new File(dir, "build.gradle").exists() ||
-                        new File(dir, "pom.xml").exists() ||
-                        hasJavaFiles(dir)) {
-                        recents.add(dir);
-                    }
-                }
-            }
-        }
-        return recents;
-    }
-    
-    private boolean hasJavaFiles(File dir) {
-        File[] files = dir.listFiles();
-        if (files == null) return false;
-        for (File f : files) {
-            if (f.isFile() && (f.getName().endsWith(".java") || 
-                                f.getName().endsWith(".kt") || 
-                                f.getName().endsWith(".groovy"))) {
-                return true;
-            }
-        }
-        return false;
-    }
-    
+
     private Button createActionButton(String title, String subtitle, boolean primary) {
         VBox content = new VBox(2);
-        
+
         Label titleLabel = new Label(title);
         titleLabel.getStyleClass().add("welcome-action-title");
-        
+
         Label subLabel = new Label(subtitle);
         subLabel.getStyleClass().add("welcome-action-sub");
-        
+
         content.getChildren().addAll(titleLabel, subLabel);
         content.setAlignment(Pos.CENTER_LEFT);
-        
+
         Button button = new Button();
         button.setGraphic(content);
         button.setMaxWidth(Double.MAX_VALUE);
         button.getStyleClass().add(primary ? "welcome-action-primary" : "welcome-action");
         button.setAlignment(Pos.CENTER_LEFT);
-        
+
         return button;
+    }
+
+    /**
+     * @return the recents container for external refresh hooks
+     * (used by the file menu when the user opens a project).
+     */
+    public void notifyProjectOpened() {
+        refreshRecents();
     }
 }

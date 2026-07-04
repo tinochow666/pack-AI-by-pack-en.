@@ -17,6 +17,8 @@ public class ListDirTool implements AiTool {
 
     @Override public String name() { return "list_dir"; }
 
+    @Override public AiTool.Risk risk() { return AiTool.Risk.READ; }
+
     @Override
     public String description() {
         return "List files and sub-directories. Args: {path?: string (default '.')}. " +

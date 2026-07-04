@@ -20,6 +20,15 @@ public interface AiTool {
     String description();
 
     /**
+     * Risk classification used by the approval policy.  Read-only tools can
+     * be auto-approved; write/destructive tools always require user consent
+     * (the default policy).
+     */
+    default Risk risk() { return Risk.WRITE; }
+
+    enum Risk { READ, WRITE, DESTRUCTIVE }
+
+    /**
      * Run the tool.
      *
      * @param args  The argument map parsed from the model's tool-call JSON

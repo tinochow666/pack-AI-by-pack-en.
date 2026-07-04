@@ -36,17 +36,17 @@ public class LoginDialog {
         dialog.initModality(Modality.APPLICATION_MODAL);
         dialog.initStyle(StageStyle.DECORATED);
         dialog.setTitle("Phiigrame Account");
-        dialog.setWidth(460);
-        dialog.setHeight(680);
-        dialog.setMinWidth(440);
-        dialog.setMinHeight(640);
+        dialog.setWidth(580);
+        dialog.setHeight(900);
+        dialog.setMinWidth(540);
+        dialog.setMinHeight(820);
         dialog.setResizable(false);
         
         VBox root = new VBox();
         root.setStyle("-fx-background-color: #2d2d2d;");
-        root.setAlignment(Pos.CENTER);
-        root.setPadding(new Insets(24, 36, 24, 36));
-        root.setSpacing(12);
+        root.setAlignment(Pos.TOP_CENTER);
+        root.setPadding(new Insets(40, 48, 32, 48));
+        root.setSpacing(18);
         
         // Logo (logo(in-app).png) - replaces the text "Phiigrame"
         ImageView logoView = new ImageView();
@@ -55,8 +55,8 @@ public class LoginDialog {
             if (logo != null && !logo.isError()) {
                 logoView.setImage(logo);
                 logoView.setPreserveRatio(true);
-                logoView.setFitWidth(140);
-                logoView.setFitHeight(90);
+                logoView.setFitWidth(220);
+                logoView.setFitHeight(140);
                 logoView.setSmooth(true);
                 root.getChildren().add(logoView);
             } else {
@@ -69,17 +69,22 @@ public class LoginDialog {
             title.setTextAlignment(TextAlignment.CENTER);
             root.getChildren().add(title);
         }
-        
+
+        // Phiigrame IDE wordmark under the logo
+        Label wordmark = new Label("Phiigrame IDE");
+        wordmark.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 22px; -fx-font-weight: bold; -fx-padding: 4 0 0 0;");
+
         Label subtitle = new Label("Sign in to your Phiigrame Account");
-        subtitle.setStyle("-fx-text-fill: #8b8b8b; -fx-font-size: 12px;");
+        subtitle.setStyle("-fx-text-fill: #8b8b8b; -fx-font-size: 13px; -fx-padding: 2 0 8 0;");
         subtitle.setTextAlignment(TextAlignment.CENTER);
-        
-        root.getChildren().addAll(subtitle, new Separator());
-        
+
+        root.getChildren().addAll(wordmark, subtitle, new Separator());
+
         // Tabs for login / register
         TabPane tabPane = new TabPane();
         tabPane.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         tabPane.setStyle("-fx-background-color: #2d2d2d;");
+        VBox.setVgrow(tabPane, Priority.ALWAYS);
         
         Tab loginTab = new Tab("Sign In");
         loginTab.setContent(createLoginForm());
@@ -89,7 +94,30 @@ public class LoginDialog {
         
         tabPane.getTabs().addAll(loginTab, registerTab);
         root.getChildren().add(tabPane);
-        
+
+        // Footer: account security + branding note. Fills the bottom of
+        // the larger dialog so it does not look like half the window is
+        // empty.
+        VBox footer = new VBox(6);
+        footer.setAlignment(Pos.CENTER);
+        footer.setPadding(new Insets(8, 0, 0, 0));
+
+        Label tagline = new Label("Pack your own AI into Phiigrame — free, forever.");
+        tagline.setStyle("-fx-text-fill: #6a9955; -fx-font-size: 12px; -fx-font-style: italic;");
+        tagline.setTextAlignment(TextAlignment.CENTER);
+        tagline.setWrapText(true);
+
+        Label meta = new Label("Phiigrame IDE 1.0.0   ·   Local AI ready   ·   2026");
+        meta.setStyle("-fx-text-fill: #4d4d4d; -fx-font-size: 11px;");
+        meta.setTextAlignment(TextAlignment.CENTER);
+
+        Label skipHint = new Label("You can also close this dialog and continue as guest.");
+        skipHint.setStyle("-fx-text-fill: #4d4d4d; -fx-font-size: 10px;");
+        skipHint.setTextAlignment(TextAlignment.CENTER);
+
+        footer.getChildren().addAll(tagline, meta, skipHint);
+        root.getChildren().add(footer);
+
         Scene scene = new Scene(root);
         scene.getStylesheets().add(getClass().getResource("/styles/dark-theme.css").toExternalForm());
         dialog.setScene(scene);
