@@ -2,6 +2,7 @@ package com.phiigrame.components;
 
 import com.phiigrame.ai.AgentApprovalPolicy;
 import com.phiigrame.ai.AiTool;
+import com.phiigrame.ai.ProjectContextBuilder;
 import com.phiigrame.ai.ToolCallParser;
 import com.phiigrame.ai.ToolRegistry;
 import com.phiigrame.dialogs.LoginDialog;
@@ -40,6 +41,8 @@ public class AiChatPanel extends VBox {
     private final AiHistoryService historyService;
     private final AuthService authService;
     private final ToolRegistry toolRegistry;
+    private final com.phiigrame.services.WorkspaceService workspaceService;
+    private final ProjectContextBuilder projectContext = new ProjectContextBuilder();
     private final AgentApprovalPolicy policy = new AgentApprovalPolicy();
 
     private ScrollPane messagesScroll;
@@ -60,11 +63,13 @@ public class AiChatPanel extends VBox {
     private boolean streaming = false;
 
     public AiChatPanel(AiService aiService, AiHistoryService historyService,
-                       AuthService authService, ToolRegistry toolRegistry) {
+                       AuthService authService, ToolRegistry toolRegistry,
+                       com.phiigrame.services.WorkspaceService workspaceService) {
         this.aiService = aiService;
         this.historyService = historyService;
         this.authService = authService;
         this.toolRegistry = toolRegistry;
+        this.workspaceService = workspaceService;
 
         getStyleClass().add("ai-panel");
         setPadding(new Insets(0));
@@ -512,6 +517,16 @@ public class AiChatPanel extends VBox {
 
         ensureSession();
 
+        // Build a short project snapshot so the model knows what the
+        // user is working on without having to ask.  Sent only to the
+        // model - the on-screen bubble still shows just the raw text.
+        String ctx = projectContext.build(
+                workspaceService != null ? workspaceService.getProjectDir() : null,
+                null);
+        final String effectiveText = ctx.isEmpty() ? text
+                : "<project_context>\n" + ctx + "</project_context>\n\n"
+                        + "User question: " + text;
+
         appendBubble("user", text);
         inputArea.clear();
 
@@ -558,11 +573,11 @@ public class AiChatPanel extends VBox {
                     appendToolEvent(tool, call, "ok", result);
                 }
             };
-            aiService.chatWithTools(text, history, toolRegistry, callback, 8,
+            aiService.chatWithTools(effectiveText, history, toolRegistry, callback, 8,
                     response -> Platform.runLater(() -> onAssistantResponse(response, true)),
                     () -> Platform.runLater(() -> finishStreaming(null)));
         } else {
-            aiService.chatStream(text, history,
+            aiService.chatStream(effectiveText, history,
                     token -> onStreamToken(token),
                     response -> Platform.runLater(() -> onAssistantResponse(response, true)),
                     () -> Platform.runLater(() -> finishStreaming(null)));

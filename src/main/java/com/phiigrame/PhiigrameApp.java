@@ -164,7 +164,7 @@ public class PhiigrameApp extends Application {
                 .register(new com.phiigrame.ai.GitTool(workspaceService, "push"));
 
         // Right sidebar - AI chat panel (requires login to start a chat)
-        aiChatPanel = new AiChatPanel(aiService, aiHistoryService, authService, toolRegistry);
+        aiChatPanel = new AiChatPanel(aiService, aiHistoryService, authService, toolRegistry, workspaceService);
         mainSplit.getItems().add(aiChatPanel);
         
         root.setCenter(mainSplit);
