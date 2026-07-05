@@ -21,11 +21,11 @@ public class EditFileTool implements AiTool {
 
     @Override public String name() { return "edit_file"; }
 
+    @Override public AiTool.Risk risk() { return AiTool.Risk.WRITE; }
+
     @Override
     public String description() {
-        return "Edit an existing file by replacing a snippet. Args: {path: string, " +
-                "old: string, new: string} (or aliases match_text / replacement). " +
-                "Fails if 'old' is not found exactly once in the file.";
+        return "Replace a snippet in a file. Args: {path, old, new}.";
     }
 
     @Override

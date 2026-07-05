@@ -21,8 +21,7 @@ public class ListDirTool implements AiTool {
 
     @Override
     public String description() {
-        return "List files and sub-directories. Args: {path?: string (default '.')}. " +
-                "Returns a directory listing.";
+        return "List a directory. Args: {path?}.";
     }
 
     @Override

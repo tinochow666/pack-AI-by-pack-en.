@@ -48,23 +48,13 @@ public class GitTool implements AiTool {
     @Override
     public String description() {
         switch (subcommand) {
-            case "status":
-                return "Show `git status` for the project. Read-only.";
-            case "log":
-                return "Show recent `git log` (one line per commit). Args: {n?: int (default 10)}. Read-only.";
-            case "diff":
-                return "Show `git diff` for the working tree. Args: {path?: string}. Read-only.";
-            case "add":
-                return "Run `git add` on one or more paths. Args: {paths: [string]}. Write - always requires approval.";
-            case "commit":
-                return "Run `git commit -m <message>`. Args: {message: string, add_all?: bool (default true)}. " +
-                        "Write - always requires approval.";
-            case "push":
-                return "Run `git push` to the configured remote. Args: {remote?: string (default 'origin'), " +
-                        "branch?: string (default current branch), set_upstream?: bool (default true)}. " +
-                        "Write - always requires approval.";
-            default:
-                return "Git sub-command: " + subcommand;
+            case "status": return "Show `git status`.";
+            case "log":    return "Show `git log`. Args: {n?}.";
+            case "diff":   return "Show `git diff`. Args: {path?}.";
+            case "add":    return "`git add` paths. Args: {paths: [string]}.";
+            case "commit": return "`git commit`. Args: {message, add_all?}.";
+            case "push":   return "`git push`. Args: {remote?, branch?, set_upstream?}.";
+            default:       return "Git " + subcommand + ".";
         }
     }
 

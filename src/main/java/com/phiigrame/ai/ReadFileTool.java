@@ -21,8 +21,7 @@ public class ReadFileTool implements AiTool {
 
     @Override
     public String description() {
-        return "Read a UTF-8 text file. Args: {path: string, max_chars?: int}. " +
-                "Returns the file content. Paths are relative to the project root if one is open.";
+        return "Read a file. Args: {path, max_chars?}.";
     }
 
     @Override

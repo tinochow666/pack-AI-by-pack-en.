@@ -17,10 +17,11 @@ public class CreateFileTool implements AiTool {
 
     @Override public String name() { return "create_file"; }
 
+    @Override public AiTool.Risk risk() { return AiTool.Risk.WRITE; }
+
     @Override
     public String description() {
-        return "Create a new file. Args: {path: string, content: string}. " +
-                "Fails if the file already exists. Creates parent directories as needed.";
+        return "Create a new file. Args: {path, content}.";
     }
 
     @Override

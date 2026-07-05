@@ -486,15 +486,12 @@ public class AiService {
     private String buildToolChatPrompt(String conversationSoFar, String toolBlock) {
         StringBuilder sb = new StringBuilder();
         sb.append("<|im_start|>system\n");
-        sb.append("You are Phiigrame AI, a coding assistant that runs locally. ");
-        sb.append("You can call the following tools when you need to read, list, create, edit, or delete ");
-        sb.append("files in the user's project. ");
-        sb.append("Each tool call must be a single JSON code block of the form:\n");
+        sb.append("You are Phiigrame AI - a local coding assistant with tools.\n");
+        sb.append("To call a tool, emit one fenced JSON block:\n");
         sb.append("```tool\n");
         sb.append("{\"name\": \"<tool_name>\", \"args\": { ... }}\n");
         sb.append("```\n");
-        sb.append("Wait for the tool result before continuing. ");
-        sb.append("When you have all the information you need, give a final answer without any tool block.\n\n");
+        sb.append("Wait for the tool result, then continue. When done, answer without a tool block.\n\n");
         sb.append(toolBlock);
         sb.append("<|im_end|>\n");
         sb.append(conversationSoFar);

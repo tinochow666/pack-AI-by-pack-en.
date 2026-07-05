@@ -38,10 +38,7 @@ public class BashTool implements AiTool {
 
     @Override
     public String description() {
-        return "Run a shell command in the project directory. " +
-                "Args: {command: string, timeout_ms?: int}. " +
-                "Returns combined stdout+stderr (truncated to 8000 chars). " +
-                "ALWAYS requires explicit user approval.";
+        return "Run a shell command. Args: {command, timeout_ms?}.";
     }
 
     @Override

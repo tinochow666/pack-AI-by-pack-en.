@@ -21,8 +21,7 @@ public class DeleteFileTool implements AiTool {
 
     @Override
     public String description() {
-        return "Delete a file from disk. Args: {path: string}. " +
-                "Always requires explicit user confirmation.";
+        return "Delete a file. Args: {path}.";
     }
 
     @Override

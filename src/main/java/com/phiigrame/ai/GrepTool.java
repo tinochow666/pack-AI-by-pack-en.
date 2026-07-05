@@ -31,11 +31,7 @@ public class GrepTool implements AiTool {
 
     @Override
     public String description() {
-        return "Search for a regex pattern in files. Args: {pattern: string, " +
-                "path?: string (default '.'), glob?: string (default '*'), " +
-                "max_results?: int (default 50)}. " +
-                "Returns lines matching the pattern, with line numbers, " +
-                "capped at max_results. Read-only.";
+        return "Search files for a regex. Args: {pattern, path?, glob?, max_results?}.";
     }
 
     @Override

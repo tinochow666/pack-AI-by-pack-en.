@@ -24,11 +24,11 @@ public class WriteFileTool implements AiTool {
 
     @Override public String name() { return "write_file"; }
 
+    @Override public AiTool.Risk risk() { return AiTool.Risk.WRITE; }
+
     @Override
     public String description() {
-        return "Replace the entire contents of an existing file. " +
-                "Args: {path: string, content: string}. " +
-                "Fails if the file does not exist - use create_file for new files.";
+        return "Replace a file's contents. Args: {path, content}.";
     }
 
     @Override

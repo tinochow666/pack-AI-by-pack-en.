@@ -27,10 +27,7 @@ public class GlobTool implements AiTool {
 
     @Override
     public String description() {
-        return "Find files by glob pattern (e.g. '**/*.java'). " +
-                "Args: {pattern: string, path?: string (default '.'), " +
-                "max_results?: int (default 200)}. " +
-                "Returns matching paths, one per line. Read-only.";
+        return "Find files by glob. Args: {pattern, path?, max_results?}.";
     }
 
     @Override

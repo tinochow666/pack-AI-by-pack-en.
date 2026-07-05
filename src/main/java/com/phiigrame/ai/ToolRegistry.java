@@ -32,10 +32,7 @@ public class ToolRegistry {
      */
     public String describeForPrompt() {
         StringBuilder sb = new StringBuilder();
-        sb.append("You can call the following tools by emitting a single JSON block:\n");
-        sb.append("```tool\n");
-        sb.append("{\"name\": \"<tool_name>\", \"args\": { ... }}\n");
-        sb.append("```\n\n");
+        sb.append("Available tools:\n");
         for (AiTool t : tools.values()) {
             sb.append("- ").append(t.name()).append(": ").append(t.description()).append('\n');
         }
